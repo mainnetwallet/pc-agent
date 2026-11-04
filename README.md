@@ -53,6 +53,21 @@ docs/             guides
 * (Optional) LLM API key for full reasoning; the agent works with a built-in
   rule-based planner without one.
 
+## Quick start (one command)
+
+Requires Python 3.10+ and Node.js 18+ on Windows. From the repo folder:
+
+```powershell
+.\start.bat
+```
+
+First run creates the virtualenv, installs Python/npm packages and Playwright,
+then starts the **backend (port 8000)**, **frontend (port 5173)** and the
+**agent** together, and opens the dashboard. Press `Ctrl+C` to stop all.
+
+Options: `.\start.bat --no-agent`, `--no-web`, `--no-server`, `--no-browser`.
+Re-run dependency install by deleting `.venv\.deps_installed`.
+
 ## Install (standalone Windows agent)
 
 ```powershell
