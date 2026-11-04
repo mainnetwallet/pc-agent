@@ -23,7 +23,7 @@ from discovery.registry import registry
 from tasks.engine import task_engine, TaskStatus
 from core.loop import LoopResult, Observation, ReasoningLoop
 from core.executor import executor
-from llm.llm import llm
+from llm.llm import llm, SETUP_HINT
 from memory.sqlite_store import memory
 
 
@@ -46,8 +46,7 @@ class Agent:
 
             # Everything is decided by the LLM; without one there is nothing to run.
             if not llm.available:
-                msg = ("LLM not configured: set LLM_API_KEY and LLM_PROVIDER "
-                       "(openai | anthropic | custom) in .env, then retry the task.")
+                msg = f"LLM not configured. {SETUP_HINT}"
                 task_engine.fail(task_id, msg)
                 return msg
 

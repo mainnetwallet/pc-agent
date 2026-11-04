@@ -18,6 +18,11 @@ from config import (
 )
 
 
+# Shown to the user wherever a task or chat is blocked because no provider is set up.
+SETUP_HINT = ("Add an LLM provider first: set LLM_PROVIDER and LLM_API_KEY in .env "
+              "(openai | anthropic | custom), then restart the agent.")
+
+
 class LLMResponse:
     def __init__(self, text: str, tool_calls: Optional[List[Dict]] = None,
                  raw: Optional[Any] = None):
@@ -56,9 +61,7 @@ class LLM:
         images: optional screenshot file paths attached to the last user message.
         """
         if not self.available:
-            raise RuntimeError(
-                "LLM not configured: set LLM_API_KEY and LLM_PROVIDER "
-                "(openai | anthropic | custom) in .env")
+            raise RuntimeError(f"LLM not configured. {SETUP_HINT}")
         if self.provider in ("openai", "custom"):
             return self._chat_openai(messages, None, "none", temperature, max_tokens,
                                      images=images)

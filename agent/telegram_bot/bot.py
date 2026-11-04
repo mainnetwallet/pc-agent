@@ -22,6 +22,7 @@ from config import (
     TELEGRAM_WEBHOOK_URL, TELEGRAM_WEBHOOK_PORT,
 )
 from tasks.engine import task_engine
+from llm.llm import llm, SETUP_HINT
 from core.agent import agent as core_agent
 from screen.capture import capture_engine
 from control.desktop import DesktopControl
@@ -223,6 +224,9 @@ class TelegramBot:
         user = update.effective_user
         if not _is_authorized(user.id):
             return
+        if not llm.available:
+            await update.message.reply_text(SETUP_HINT)
+            return
         # /schedule <seconds_from_now> <instruction>
         if len(context.args) < 2:
             await update.message.reply_text("Usage: /schedule <seconds> <instruction>")
@@ -247,6 +251,9 @@ class TelegramBot:
         text = update.message.text or ""
         if not text.strip():
             await update.message.reply_text("Please send a text instruction, or attach an image/document.")
+            return
+        if not llm.available:
+            await update.message.reply_text(SETUP_HINT)
             return
         # Treat as a task instruction
         task_id = task_engine.create_task(text, metadata={"source": "telegram", "user": user.id})

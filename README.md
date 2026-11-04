@@ -236,9 +236,11 @@ between turns and between actions, abort after 5 identical or 5 failing actions 
 and a `done` is pushed back once if checklist items are still pending. Task summaries are
 saved to conversation memory so the next task knows what was done before.
 
-The agent is LLM-only: there is no rule-based planner or mock mode. Without a working
-LLM (`LLM_API_KEY` + `LLM_PROVIDER`) a task fails immediately with a clear error, and
-the dashboard chat answers with HTTP 503 instead of guessing the intent.
+The agent is LLM-only: there is no rule-based planner or mock mode. Without a configured
+provider (`LLM_PROVIDER` + `LLM_API_KEY`) no task is created anywhere (dashboard, mobile,
+Telegram, `/schedule`): the server answers HTTP 409, Telegram replies with the setup hint,
+and the dashboard chat tells you to add a provider first. If the provider is configured
+but fails (bad key, network), chat answers HTTP 503 with the reason instead of guessing.
 
 Known limitations:
 

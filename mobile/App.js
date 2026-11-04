@@ -42,6 +42,10 @@ export default function App() {
         body: JSON.stringify({ instruction: input }),
       });
       const d = await r.json();
+      if (!r.ok) {
+        Alert.alert('Task not created', typeof d?.detail === 'string' ? d.detail : `HTTP ${r.status}`);
+        return;
+      }
       setMessages([...messages, { me: true, text: input }]);
       setMessages([...messages, { me: false, text: `Task ${d.task_id} created (${d.status}).` }]);
       setInput('');

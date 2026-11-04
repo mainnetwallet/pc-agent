@@ -127,7 +127,14 @@ function Console({ online }: { online: boolean }) {
     e.preventDefault();
     if (!text.trim()) return;
     setSending(true); setErr("");
-    try { await api.createTask(text.trim()); setText(""); reload(); }
+    try {
+      const res = await api.createTask(text.trim());
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(typeof d?.detail === "string" ? d.detail : `The server refused the task (HTTP ${res.status}).`);
+      }
+      setText(""); reload();
+    }
     catch (x: any) { setErr(x.message || "Couldn't send the task."); }
     finally { setSending(false); }
   };

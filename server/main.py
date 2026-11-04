@@ -125,8 +125,16 @@ def device_me(authorization: Optional[str] = None):
     return {"paired": True}
 
 # --------------------------------------------------------------------------- tasks
+def _llm_ready() -> bool:
+    from llm.llm import llm  # same provider settings as the agent (.env)
+    return llm.available
+
 @app.post("/tasks")
 def create_task(task: TaskCreate, _auth=Depends(verify_api_key)):
+    # Everything is decided by the LLM: without a provider no task is created.
+    if not _llm_ready():
+        from llm.llm import SETUP_HINT
+        raise HTTPException(status_code=409, detail=SETUP_HINT)
     task_id = str(uuid.uuid4())
     conn = get_conn()
     try:
@@ -440,7 +448,9 @@ def chat(req: ChatRequest, _auth=Depends(verify_api_key)):
     text = req.message.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Empty message")
-    from llm.llm import llm  # same provider settings as the agent (.env)
+    from llm.llm import llm, SETUP_HINT  # same provider settings as the agent (.env)
+    if not llm.available:
+        return {"reply": SETUP_HINT, "task_id": None, "status": None}
     recent = "; ".join(f"{t['status']}: {t['instruction'][:60]}" for t in list_tasks(status=None)["tasks"][:5]) or "none"
     system = _CHAT_SYSTEM + f"PC agent online: {pc_status()['online']}. Recent tasks: {recent}."
     hist = [{"role": m.role, "content": m.content} for m in req.history[-10:] if m.role in ("user", "assistant")]
