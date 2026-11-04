@@ -1,0 +1,173 @@
+INFO:     127.0.0.1:58487 - "OPTIONS /devices/pair HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58487 - "POST /devices/pair HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:58487 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57602 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57078 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58487 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58487 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57078 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57078 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58487 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60251 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60252 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60253 - "GET /pc/screenshot HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60254 - "POST /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53779 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53779 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52110 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50774 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50774 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:61327 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61327 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52013 - "OPTIONS /devices/pair HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52013 - "POST /devices/pair HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:52013 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53961 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54722 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53961 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54720 - "OPTIONS /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54720 - "POST /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63051 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63051 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:52436 - "OPTIONS /pc/stream/start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52436 - "POST /pc/stream/start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52436 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:53034 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63820 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:57349 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:56342 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65346 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:54033 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:54712 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:54203 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:62039 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:60141 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:50194 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:56875 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:60964 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:49164 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:59325 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64840 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:54496 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:51135 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:50586 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:52482 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:59325 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:51685 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:58711 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:64588 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63445 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65100 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:50279 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:52210 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:63077 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:53677 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:59807 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:57023 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:50142 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:55247 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:65080 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55926 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55926 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:58549 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks?status=COMPLETED HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks?status=RUNNING HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /tasks?status=QUEUED HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58549 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59836 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63509 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59836 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59836 - "POST /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59836 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "POST /tasks/aedddbdc-0a35-4c18-9b51-cad67aa7b17f/stop HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "POST /tasks/83d150f4-e885-4dc4-b215-051b34ee6349/stop HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "POST /tasks/512df6c9-80d8-481c-a235-1157984fc4e4/stop HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "POST /tasks/086fca29-9cc4-4745-a53c-403fc92dbf8e/stop HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50255 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55224 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55224 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:50255 - "POST /devices/pair HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:50255 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59374 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59374 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59374 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "POST /tasks/aedddbdc-0a35-4c18-9b51-cad67aa7b17f/stop HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61556 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61556 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65032 - "POST /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65033 - "GET /tasks/b8b9c679-b9e4-428f-ae9d-acc54a61442f HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65034 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61767 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61767 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61661 - "GET /pc/screenshot HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61473 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62751 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62751 - "GET /v1/models HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57243 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54886 - "OPTIONS /devices/pair HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64795 - "POST /devices/pair HTTP/1.1" 422 Unprocessable Entity
+INFO:     127.0.0.1:50436 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50437 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55275 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55276 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64262 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62669 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54326 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:54325 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59047 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59055 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63302 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63302 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63302 - "GET /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63302 - "GET /tasks HTTP/1.1" 200 OK

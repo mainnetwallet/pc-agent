@@ -1,0 +1,5 @@
+INFO:     127.0.0.1:53603 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53604 - "GET /pc/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53605 - "GET /pc/screenshot HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49886 - "POST /tasks HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49887 - "GET /tasks?status=QUEUED HTTP/1.1" 200 OK

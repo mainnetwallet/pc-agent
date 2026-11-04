@@ -1,0 +1,4 @@
+2026-11-05 00:14:51,482 [INFO] pc_agent: Built-in adapters registered
+2026-11-05 00:14:51,490 [INFO] pc_agent: Task queue worker started
+2026-11-05 00:14:51,490 [WARNING] pc_agent: TELEGRAM_BOT_TOKEN not set; Telegram disabled
+2026-11-05 00:14:51,494 [INFO] pc_agent: PC Agent () running in STANDALONE mode
