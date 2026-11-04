@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, setToken } from "./api";
 
@@ -10,7 +10,7 @@ const LABEL: Record<string, string> = {
   RECOVERING: "Recovering", COMPLETED: "Completed", FAILED: "Failed",
 };
 const NAV = [
-  ["console", "Console"], ["tasks", "Tasks"], ["apps", "Apps"],
+  ["console", "Console"], ["chat", "Chat"], ["tasks", "Tasks"], ["apps", "Apps"],
   ["tools", "Tools"], ["settings", "Settings"],
 ] as const;
 const logout = () => { localStorage.removeItem("pc_agent_token"); location.reload(); };
@@ -160,6 +160,57 @@ function Console({ online }: { online: boolean }) {
   );
 }
 
+type Msg = { role: "user" | "agent"; text: string; task?: { id: string; status: string }; fail?: boolean };
+const CHAT_KEY = "pc_agent_chat";
+
+function Chat({ openTasks }: { openTasks: () => void }) {
+  const [msgs, setMsgs] = useState<Msg[]>(() => {
+    try { return JSON.parse(localStorage.getItem(CHAT_KEY) || "[]"); } catch { return []; }
+  });
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const end = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    try { localStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-50))); } catch { /* storage blocked */ }
+    end.current?.scrollIntoView({ block: "end" });
+  }, [msgs, busy]);
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    const message = text.trim();
+    if (!message || busy) return;
+    const history = msgs.filter(m => !m.fail).slice(-10).map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
+    setMsgs(m => [...m, { role: "user", text: message }]); setText(""); setBusy(true);
+    try {
+      const res = await api.chat(message, history);
+      const d = await res.json();
+      if (!res.ok) throw new Error(typeof d?.detail === "string" ? d.detail : `The server refused the request (HTTP ${res.status}).`);
+      setMsgs(m => [...m, { role: "agent", text: d.reply, task: d.task_id ? { id: d.task_id, status: d.status } : undefined }]);
+    } catch (x: any) {
+      setMsgs(m => [...m, { role: "agent", fail: true, text: x.message === "Failed to fetch" ? "Can't reach the server on port 8000. Start it with “pc”, then try again." : x.message || "Something went wrong." }]);
+    } finally { setBusy(false); }
+  };
+  return (
+    <div className="chat">
+      <div className="log" aria-live="polite">
+        {msgs.length === 0 && <p className="empty">Ask about your PC agent, or tell it what to do. For example: “What is running now?” or “Open Notepad and write a note.”</p>}
+        {msgs.map((m, i) => (
+          <div key={i} className={`msg ${m.role}${m.fail ? " fail" : ""}`}>
+            <p>{m.text}</p>
+            {m.task && <div className="made"><Chip s={m.task.status} /><span>Task {m.task.id.slice(0, 8)} created</span><button onClick={openTasks}>View tasks</button></div>}
+          </div>
+        ))}
+        {busy && <div className="msg agent"><p className="wait">Thinking</p></div>}
+        <div ref={end} />
+      </div>
+      <form className="compose" onSubmit={send}>
+        <input value={text} onChange={e => setText(e.target.value)} placeholder="Message the agent" aria-label="Message" autoComplete="off" />
+        <button className="primary" disabled={busy || !text.trim()}>Send</button>
+        {msgs.length > 0 && <button type="button" onClick={() => setMsgs([])}>Clear</button>}
+      </form>
+    </div>
+  );
+}
+
 function Tasks() {
   const [filter, setFilter] = useState("all");
   const { tasks, reload } = useTasks(filter === "all" ? undefined : filter);
@@ -228,6 +279,7 @@ export default function App() {
       <main>
         <h1>{NAV.find(n => n[0] === view)?.[1]}</h1>
         {view === "console" && <Console online={!!status?.online} />}
+        {view === "chat" && <Chat openTasks={() => setView("tasks")} />}
         {view === "tasks" && <Tasks />}
         {view === "apps" && <Note title="Installed apps">Nothing to list yet. The agent discovers apps on the PC but doesn't report them to this dashboard. To use one, name it in a task, for example “Open Chrome and search for today's weather.”</Note>}
         {view === "tools" && <Note title="Learned tools">Nothing to list yet. The agent registers tools as it discovers applications, but this dashboard can't show them yet.</Note>}

@@ -17,6 +17,7 @@ Endpoints:
   POST   /pc/stream/stop
   POST   /devices/pair
   GET    /devices/me
+  POST   /chat
   POST   /auth/token
   WebSocket /ws/{device_token}
   POST   /webrtc/signal
@@ -415,6 +416,68 @@ async def agent_connect(ws: WebSocket):
             await manager.broadcast({"type": "agent.offline"})
 
 # --------------------------------------------------------------------------- startup/shutdown
+# --------------------------------------------------------------------------- chat
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    message: str
+    history: list[ChatMessage] = []
+
+_CHAT_SYSTEM = (
+    "You are the assistant in the dashboard of an autonomous Windows PC agent. "
+    "Answer questions briefly, in the same language the user writes in. "
+    "If the user asks you to DO something on the PC (open an app, create or move files, browse, type, save...), "
+    "do not claim to have done it. Reply with ONLY this JSON: "
+    '{"action":"task","instruction":"<clear instruction in English>","reply":"<one short sentence confirming it, in the same language as the user>"}. '
+    'For everything else reply with ONLY this JSON: {"action":"reply","reply":"<your answer>"}. '
+)
+_VERBS = ("open ", "launch ", "start ", "create ", "make ", "write ", "type ", "save ", "search ", "find ",
+          "download ", "move ", "copy ", "delete ", "close ", "run ", "take ", "send ", "click ", "play ",
+          "install ", "go to ")
+
+@app.post("/chat")
+def chat(req: ChatRequest, _auth=Depends(verify_api_key)):
+    """Answer a dashboard chat message, or turn it into a task when it asks the agent to do something."""
+    text = req.message.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty message")
+    from llm.llm import llm  # same provider settings as the agent (.env)
+    recent = "; ".join(f"{t['status']}: {t['instruction'][:60]}" for t in list_tasks(status=None)["tasks"][:5]) or "none"
+    system = _CHAT_SYSTEM + f"PC agent online: {pc_status()['online']}. Recent tasks: {recent}."
+    hist = [{"role": m.role, "content": m.content} for m in req.history[-10:] if m.role in ("user", "assistant")]
+    while hist and hist[0]["role"] != "user":
+        hist.pop(0)
+    resp = llm.chat([{"role": "system", "content": system}, *hist, {"role": "user", "content": text}],
+                    temperature=0.3, max_tokens=500)
+    raw = (resp.text or "").strip()
+    working = bool(llm.api_key) and llm.provider != "mock" and not raw.startswith(("[FALLBACK", "[LLM provider error"))
+    instruction, reply = None, raw
+    if working:
+        data = llm._extract_json(raw)
+        if data:
+            reply = str(data.get("reply") or "")
+            if data.get("action") == "task":
+                instruction = str(data.get("instruction") or "").strip() or None
+    else:
+        low = text.lower()
+        if low.startswith("task:"):
+            instruction = text[5:].strip() or None
+        elif low.startswith(_VERBS):
+            instruction = text
+        why = raw.splitlines()[0].strip("[]") if raw.startswith("[LLM provider error") else "check LLM_API_KEY in .env"
+        reply = "Creating that as a task." if instruction else (
+            f"I can't answer questions right now because the language model isn't working ({why}). "
+            "Tell me what to do on the PC, like 'Open Notepad', and I'll create a task.")
+    out = {"reply": reply or ("On it." if instruction else "The language model returned an empty reply."),
+           "task_id": None, "status": None}
+    if instruction:
+        t = create_task(TaskCreate(instruction=instruction))
+        out.update(task_id=t["task_id"], status=t["status"])
+    return out
+
+
 @app.on_event("startup")
 async def _startup():
     global _loop
