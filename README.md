@@ -55,21 +55,41 @@ docs/             guides
 
 ## Quick start (one command)
 
-Requires Python 3.10+ and Node.js 18+ on Windows. From the repo folder:
+Requires Windows, Python 3.10+ and Node.js 18+.
+
+**First time (once):**
 
 ```powershell
-.\start.bat
+git clone https://github.com/mainnetwallet/pc-agent.git
+cd pc-agent
+.\pc.cmd install
 ```
 
-First run creates the virtualenv, installs Python/npm packages and Playwright,
-then starts the **backend (port 8000)**, **frontend (port 5173)** and the
-**agent** together, and opens the dashboard. Press `Ctrl+C` to stop all.
+Then open a **new PowerShell window** (so the updated PATH is picked up).
 
-Even shorter: run `.\pc.cmd install` once, open a new PowerShell, then just type
-`pc` (works from any folder; `pc run` also works).
+**Run everything (from any folder):**
 
-Options: `.\start.bat --no-agent`, `--no-web`, `--no-server`, `--no-browser`.
-Re-run dependency install by deleting `.venv\.deps_installed`.
+```powershell
+pc
+```
+
+The first run creates the virtualenv, installs Python/npm packages and
+Playwright, then starts the **backend (port 8000)**, **frontend (port 5173)**
+and the **agent** together and opens the dashboard at http://localhost:5173.
+Press `Ctrl+C` to stop everything.
+
+**Update to the latest version:**
+
+```powershell
+cd C:\Users\mainw\pc-agent
+git pull
+pc
+```
+
+Options: `pc --no-agent`, `pc --no-web`, `pc --no-server`, `pc --no-browser`
+(`pc run` also works). Without installing to PATH, run `.\pc.cmd` or
+`.\start.bat` from inside the `pc-agent` folder. To force a reinstall of the
+Python packages, delete `.venv\.deps_installed`.
 
 ## Install (standalone Windows agent)
 
