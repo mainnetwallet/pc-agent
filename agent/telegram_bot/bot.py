@@ -310,7 +310,9 @@ class TelegramBot:
         self.application = app
         logger = __import__("logging").getLogger("telegram")
         logger.info("Telegram long-polling started")
-        app.run_polling(drop_pending_updates=True)
+        # Running in a worker thread: needs its own event loop and no signal handlers.
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        app.run_polling(drop_pending_updates=True, stop_signals=None)
 
     def run_webhook(self) -> None:
         """Webhook mode (server-based)."""
@@ -332,8 +334,10 @@ class TelegramBot:
         app.add_handler(CommandHandler("schedule", self._cmd_schedule))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_message))
         self.application = app
+        asyncio.set_event_loop(asyncio.new_event_loop())
         app.run_webhook(listen="0.0.0.0", port=TELEGRAM_WEBHOOK_PORT,
-                        url_path=TELEGRAM_BOT_TOKEN, webhook_url=TELEGRAM_WEBHOOK_URL)
+                        url_path=TELEGRAM_BOT_TOKEN, webhook_url=TELEGRAM_WEBHOOK_URL,
+                        stop_signals=None)
 
 
 # Singleton

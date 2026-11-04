@@ -140,6 +140,7 @@ def create_task(task: TaskCreate, _auth=Depends(verify_api_key)):
     finally:
         conn.close()
     _broadcast({"type": "task.created", "task_id": task_id, "instruction": task.instruction})
+    _run_async(_dispatch_queued())
     return {"task_id": task_id, "status": "QUEUED"}
 
 @app.get("/tasks")
@@ -181,29 +182,33 @@ def get_task(task_id: str, _auth=Depends(verify_api_key)):
 @app.post("/tasks/{task_id}/message")
 def task_message(task_id: str, msg: TaskMessage, _auth=Depends(verify_api_key)):
     _broadcast({"type": "task.message", "task_id": task_id, "message": msg.message})
+    _run_async(_send_agent({"type": "message", "task_id": task_id, "message": msg.message}))
     return {"ok": True}
 
 @app.post("/tasks/{task_id}/stop")
 def stop_task(task_id: str, _auth=Depends(verify_api_key)):
     _broadcast({"type": "task.stop", "task_id": task_id})
+    _run_async(_send_agent({"type": "stop", "task_id": task_id}))
     return {"ok": True}
 
 @app.post("/tasks/{task_id}/pause")
 def pause_task(task_id: str, _auth=Depends(verify_api_key)):
     _broadcast({"type": "task.pause", "task_id": task_id})
+    _run_async(_send_agent({"type": "pause", "task_id": task_id}))
     return {"ok": True}
 
 @app.post("/tasks/{task_id}/resume")
 def resume_task(task_id: str, _auth=Depends(verify_api_key)):
     _broadcast({"type": "task.resume", "task_id": task_id})
+    _run_async(_send_agent({"type": "resume", "task_id": task_id}))
     return {"ok": True}
 
 # --------------------------------------------------------------------------- PC status / screenshot / stream
 @app.get("/pc/status")
 def pc_status(_auth=Depends(verify_api_key)):
     return {
-        "online": True,
-        "agent_id": os.getenv("AGENT_ID", "pc-agent"),
+        "online": _agent["ws"] is not None,
+        "agent_id": _agent["id"] or os.getenv("AGENT_ID", "pc-agent"),
         "streaming": _stream_state.get("active", False),
     }
 
@@ -298,15 +303,122 @@ async def websocket_endpoint(websocket: WebSocket, device_id: str):
         manager.disconnect(device_id)
 
 
-def _broadcast(message: dict, to_device: Optional[str] = None):
+# --------------------------------------------------------------------------- agent link
+_loop: Optional[asyncio.AbstractEventLoop] = None
+_agent = {"ws": None, "id": None, "last_seen": 0.0}
+FINAL_STATES = ("COMPLETED", "FAILED", "CANCELLED")
+
+
+def _run_async(coro):
+    """Schedule a coroutine on the server loop from sync (threadpool) or async code."""
+    if _loop is None:
+        coro.close()
+        return
     try:
-        asyncio.get_event_loop().create_task(manager.broadcast(message, to_device))
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is _loop:
+        _loop.create_task(coro)
+    else:
+        asyncio.run_coroutine_threadsafe(coro, _loop)
+
+
+def _broadcast(message: dict, to_device: Optional[str] = None):
+    _run_async(manager.broadcast(message, to_device))
+
+
+async def _send_agent(msg: dict) -> bool:
+    ws = _agent["ws"]
+    if ws is None:
+        return False
+    try:
+        await ws.send_text(json.dumps(msg))
+        return True
     except Exception:
+        return False
+
+
+def _q(sql: str) -> str:
+    return sql.replace("?", "%s") if USE_POSTGRES else sql
+
+
+def _queued_tasks():
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, instruction FROM tasks WHERE status='QUEUED' ORDER BY created_at ASC")
+        return [(r[0], r[1]) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _update_task(task_id: str, status: str, result=None, error=None):
+    now = time.time()
+    done = now if status in FINAL_STATES else None
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("UPDATE tasks SET status=?, result=COALESCE(?, result), error=COALESCE(?, error), "
+                       "updated_at=?, completed_at=COALESCE(?, completed_at) WHERE id=?"),
+                    (status, result, error, now, done, task_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+async def _dispatch_queued():
+    """Send every QUEUED task to the connected agent."""
+    if _agent["ws"] is None:
+        return
+    for tid, instruction in await asyncio.to_thread(_queued_tasks):
+        if await _send_agent({"type": "task", "task_id": tid, "instruction": instruction}):
+            await asyncio.to_thread(_update_task, tid, "DISPATCHED")
+            await manager.broadcast({"type": "task.updated", "task_id": tid, "status": "DISPATCHED"})
+
+
+@app.websocket("/agent/connect")
+async def agent_connect(ws: WebSocket):
+    if RELAY_API_KEY and ws.headers.get("x-api-key") != RELAY_API_KEY:
+        await ws.close(code=1008)
+        return
+    await ws.accept()
+    old = _agent["ws"]
+    _agent.update(ws=ws, id=ws.headers.get("x-agent-id") or "pc-agent", last_seen=time.time())
+    if old is not None:
+        try:
+            await old.close()
+        except Exception:
+            pass
+    logger.info("Agent connected: %s", _agent["id"])
+    await manager.broadcast({"type": "agent.online", "agent_id": _agent["id"]})
+    try:
+        await _dispatch_queued()
+        while True:
+            try:
+                msg = json.loads(await ws.receive_text())
+            except json.JSONDecodeError:
+                continue
+            _agent["last_seen"] = time.time()
+            if msg.get("type") == "task.update" and msg.get("task_id") and msg.get("status") != "QUEUED":
+                await asyncio.to_thread(_update_task, msg["task_id"], msg.get("status", "RUNNING"),
+                                        msg.get("result"), msg.get("error"))
+                await manager.broadcast({"type": "task.updated", "task_id": msg["task_id"],
+                                         "status": msg.get("status"), "result": msg.get("result"),
+                                         "error": msg.get("error")})
+    except WebSocketDisconnect:
         pass
+    finally:
+        if _agent["ws"] is ws:
+            _agent.update(ws=None)
+            logger.info("Agent disconnected")
+            await manager.broadcast({"type": "agent.offline"})
 
 # --------------------------------------------------------------------------- startup/shutdown
 @app.on_event("startup")
-def _startup():
+async def _startup():
+    global _loop
+    _loop = asyncio.get_running_loop()
     logger.info("PC Agent Relay started")
 
 @app.get("/health")

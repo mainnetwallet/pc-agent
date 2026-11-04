@@ -31,7 +31,7 @@ agent/            Windows agent (Python)
   screen/         screen capture & recording
   memory/         SQLite memory store
   llm/            provider-agnostic LLM layer
-  telegram/       Telegram bot
+  telegram_bot/   Telegram bot
   runtime/        relay IPC client, system tray
   main.py         entry point (standalone or relay mode)
   config.py       centralized configuration
@@ -168,34 +168,39 @@ Edit `.env` (see `.env.example`). Key settings:
 /stop <task> /pause <task> /resume <task> /schedule <secs> <instruction> /help
 ```
 
-## Current status (read this first)
+## How it fits together
 
-What works as documented:
+`pc run` / `start.bat` starts three processes:
 
-* **Standalone agent** (`python agent/main.py`, `RELAY_URL` empty): task worker,
-  desktop control, screen capture, memory. Telegram polling is intended here
-  (see the first known issue).
-* **Relay server** (`server/`) runs on port 8000: REST endpoints (`/tasks`,
-  `/pc/screenshot`, `/devices/pair`, `/health`, ...), WebSocket `/ws/{device_id}`,
-  SQLite storage. `/pc/screenshot` captures the screen of the machine the server
-  runs on, so it works when the server runs on the Windows PC.
-* **Web dashboard** (`web/`) on port 5173, proxying `/api` and `/ws` to port 8000.
+```
+Web dashboard (5173) --/api,/ws--> Relay server (8000) <--ws /agent/connect-- Agent (Windows PC)
+                                                                               |-- task worker
+                                                                               |-- Telegram polling (if token set)
+                                                                               `-- screen capture / desktop control
+```
 
-Known issues (as of this commit):
+* A task created in the dashboard (`POST /tasks`) is stored by the server and
+  pushed to the connected agent; the agent runs it and reports
+  `RUNNING` / `COMPLETED` / `FAILED` back (status updates arrive within ~1 s).
+  `/stop`, `/pause`, `/resume` and `/message` are forwarded to the agent.
+* The agent connects to the server automatically. `run.py` sets
+  `RELAY_URL=ws://localhost:8000` for the agent unless `RELAY_URL` is already
+  set in your environment. `http(s)://` URLs are accepted and converted to
+  `ws(s)://`. Leave `RELAY_URL` empty in `.env` for a local setup.
+* If the agent is not running, tasks wait as `QUEUED` and are sent as soon as
+  it connects. `/pc/status` reports whether an agent is connected.
+* Telegram runs inside the agent and works independently of the server.
+* `/pc/screenshot` captures the screen of the machine the server runs on, so
+  run the server on the Windows PC.
 
-1. **Telegram import clash.** `agent/telegram/` has the same name as the
-   `python-telegram-bot` package (`telegram`), so `agent/main.py` can fail to
-   start Telegram (`cannot import name 'Update' from 'telegram'`). Fix: rename the
-   folder (e.g. `agent/telegram_bot/`) and update the imports.
-2. **Relay mode is not wired up.** The agent connects to `RELAY_URL + /agent/connect`
-   (and needs a `ws://`/`wss://` URL), but the server has no `/agent/connect`
-   endpoint, and the agent imports `agent.runtime.ipc`, which is not importable
-   when started as `python agent/main.py`. Tasks created from the dashboard are
-   stored by the server but are **not** picked up by the agent yet.
-3. `/pc/status` currently always reports `online: true`.
+Known limitations:
 
-Because of 2, today the dashboard/server and the agent run side by side but do
-not exchange tasks. Use Telegram (after fixing 1) to drive the agent.
+1. Tasks started from Telegram are not mirrored in the dashboard.
+2. The server runs on the Windows PC for screenshots/streaming; a remote
+   (cloud) server cannot capture your screen yet.
+3. Live WebRTC streaming is not implemented; the dashboard uses screenshots.
+4. Only part of this has been tested end to end on a real Windows desktop;
+   report anything that fails.
 
 ## Target workflows (design goals, not all independently verified)
 

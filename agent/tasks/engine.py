@@ -79,8 +79,9 @@ class TaskEngine:
     # --------------------------------------------------------------- lifecycle
     def create_task(self, instruction: str, priority: int = 0,
                     scheduled_at: Optional[float] = None,
-                    metadata: Optional[Dict] = None) -> str:
-        task_id = str(uuid.uuid4())
+                    metadata: Optional[Dict] = None,
+                    task_id: Optional[str] = None) -> str:
+        task_id = task_id or str(uuid.uuid4())
         task = Task(
             id=task_id, instruction=instruction, status=TaskStatus.QUEUED,
             priority=priority, scheduled_at=scheduled_at,

@@ -80,10 +80,16 @@ def main():
         print("[run] nothing to start")
         return 1
 
+    # Connect the agent to the local relay server unless RELAY_URL is already set
+    # in the environment (process env wins over .env).
+    agent_env = dict(env)
+    if not args.no_server and "RELAY_URL" not in os.environ:
+        agent_env["RELAY_URL"] = "ws://localhost:8000"
+
     procs = []
     for name, cmd, cwd in jobs:
         print(f"[run] starting {name} ...", flush=True)
-        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
+        p = subprocess.Popen(cmd, cwd=cwd, env=agent_env if name == "agent" else env, stdout=subprocess.PIPE,
                              stderr=subprocess.STDOUT, text=True,
                              encoding="utf-8", errors="replace", bufsize=1)
         procs.append((name, p))

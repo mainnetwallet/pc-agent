@@ -1,13 +1,15 @@
 """Autonomous PC Agent - main entry point.
 
+Always: task worker + local Telegram polling + on-demand screen capture.
+
 Standalone mode (RELAY_URL empty):
   * Runs the task engine background worker.
   * Runs Telegram long-polling locally.
   * Runs screen capture on demand.
 
-Relay mode (RELAY_URL set):
-  * Connects outbound to the FastAPI server via authenticated WSS.
-  * Executes tasks dispatched from the server.
+Relay mode (RELAY_URL set, e.g. ws://localhost:8000):
+  * ALSO connects outbound to the FastAPI server (ws/wss, /agent/connect).
+  * Executes tasks dispatched from the server and reports their status back.
 """
 
 import os
@@ -72,12 +74,13 @@ def task_queue_worker():
             time.sleep(2.0)
 
 
-def run_relay_mode():
-    """Connect outbound to the relay server (WSS). Deferred import to avoid
-    hard dependency when running standalone."""
-    from agent.runtime.ipc import RelayClient
-    client = RelayClient()
-    client.run_forever()
+def start_relay_thread():
+    """Connect outbound to the relay server (ws/wss) in a background thread."""
+    from runtime.ipc import RelayClient
+    t = threading.Thread(target=RelayClient().run_forever, daemon=True, name="relay")
+    t.start()
+    logger.info("Relay client started -> %s", RELAY_URL)
+    return t
 
 
 def run_standalone_mode():
@@ -91,12 +94,15 @@ def run_standalone_mode():
 
     # Telegram bot (long-polling) if token configured
     if TELEGRAM_BOT_TOKEN:
-        from telegram.bot import TelegramBot
-        bot = TelegramBot()
-        t = threading.Thread(target=bot.run_polling, daemon=True, name="telegram")
-        t.start()
-        threads.append(t)
-        logger.info("Telegram polling started")
+        try:
+            from telegram_bot.bot import TelegramBot
+            bot = TelegramBot()
+            t = threading.Thread(target=bot.run_polling, daemon=True, name="telegram")
+            t.start()
+            threads.append(t)
+            logger.info("Telegram polling started")
+        except Exception as e:
+            logger.exception("Telegram failed to start (agent keeps running): %s", e)
     else:
         logger.warning("TELEGRAM_BOT_TOKEN not set; Telegram disabled")
 
@@ -138,14 +144,17 @@ def main():
         logger.exception("Failed to register adapters: %s", e)
 
     memory.audit(None, "agent.startup", {"agent": AGENT_NAME, "id": AGENT_ID,
-                                         "mode": "relay" if RELAY_URL else "standalone"})
+                                         "mode": "standalone+relay" if RELAY_URL else "standalone"})
 
     run_watchdog()
 
+    # Relay (dashboard/server) and local Telegram + task worker run together.
     if RELAY_URL:
-        run_relay_mode()
-    else:
-        run_standalone_mode()
+        try:
+            start_relay_thread()
+        except Exception as e:
+            logger.exception("Relay client failed to start: %s", e)
+    run_standalone_mode()
 
 
 if __name__ == "__main__":
