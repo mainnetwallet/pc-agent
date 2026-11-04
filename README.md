@@ -74,22 +74,24 @@ Re-run dependency install by deleting `.venv\.deps_installed`.
 ## Install (standalone Windows agent)
 
 ```powershell
-# Clone / open this folder
-cd "C:\Users\mainw\PC AGENTS"
+# Get the code
+git clone https://github.com/mainnetwallet/pc-agent.git
+cd pc-agent
 
 # Create a virtual environment (recommended)
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
 # Install Python dependencies
-pip install -r requirements.txt   # or use the list below
+pip install -r requirements.txt
 
 # Install Playwright Chromium browser
-python -m playwright install chromium --with-deps
+python -m playwright install chromium
 
 # Copy and edit the environment file
 copy .env.example .env
 # Edit .env: set TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_IDS at minimum
+# (if .env already exists, keep it and edit it instead)
 
 # Run the agent (standalone mode: local Telegram polling, no cloud server)
 python agent/main.py
@@ -116,9 +118,10 @@ python agent/main.py
 FastAPI relay server:
 
 ```powershell
-cd server
-.\..\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
+cd server            # must run from this folder (imports local modules)
 uvicorn main:app --host 0.0.0.0 --port 8000
+# API docs: http://localhost:8000/docs   health: http://localhost:8000/health
 ```
 
 Web dashboard (dev):
@@ -130,12 +133,20 @@ npm run dev
 # open http://localhost:5173
 ```
 
-Android app:
+Android app (edit `API_BASE` at the top of `mobile/App.js` first - it defaults to
+`http://localhost:8000`, which a phone cannot reach; use your PC's LAN IP):
 
 ```powershell
 cd mobile
 npm install
 npx expo start --android
+```
+
+Tests:
+
+```powershell
+pip install pytest
+pytest tests
 ```
 
 ## Configuration
@@ -144,8 +155,10 @@ Edit `.env` (see `.env.example`). Key settings:
 
 * `TELEGRAM_BOT_TOKEN` and `OWNER_TELEGRAM_IDS` — required to control via
   Telegram. Only listed numeric IDs may operate the PC.
-* `RELAY_URL` — leave empty for standalone mode; set to your FastAPI server
-  URL for distributed/relay mode.
+* `RELAY_URL` — **leave empty** (standalone mode, the working path). Relay mode
+  is not functional yet, see *Current status* below.
+* `RELAY_API_KEY` — if set, the server rejects requests whose `x_api_key`
+  does not match.
 * `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL` — configure the reasoning LLM.
 
 ## Telegram commands
@@ -155,11 +168,40 @@ Edit `.env` (see `.env.example`). Key settings:
 /stop <task> /pause <task> /resume <task> /schedule <secs> <instruction> /help
 ```
 
-## Acceptance workflows (verified)
+## Current status (read this first)
+
+What works as documented:
+
+* **Standalone agent** (`python agent/main.py`, `RELAY_URL` empty): task worker,
+  desktop control, screen capture, memory. Telegram polling is intended here
+  (see the first known issue).
+* **Relay server** (`server/`) runs on port 8000: REST endpoints (`/tasks`,
+  `/pc/screenshot`, `/devices/pair`, `/health`, ...), WebSocket `/ws/{device_id}`,
+  SQLite storage. `/pc/screenshot` captures the screen of the machine the server
+  runs on, so it works when the server runs on the Windows PC.
+* **Web dashboard** (`web/`) on port 5173, proxying `/api` and `/ws` to port 8000.
+
+Known issues (as of this commit):
+
+1. **Telegram import clash.** `agent/telegram/` has the same name as the
+   `python-telegram-bot` package (`telegram`), so `agent/main.py` can fail to
+   start Telegram (`cannot import name 'Update' from 'telegram'`). Fix: rename the
+   folder (e.g. `agent/telegram_bot/`) and update the imports.
+2. **Relay mode is not wired up.** The agent connects to `RELAY_URL + /agent/connect`
+   (and needs a `ws://`/`wss://` URL), but the server has no `/agent/connect`
+   endpoint, and the agent imports `agent.runtime.ipc`, which is not importable
+   when started as `python agent/main.py`. Tasks created from the dashboard are
+   stored by the server but are **not** picked up by the agent yet.
+3. `/pc/status` currently always reports `online: true`.
+
+Because of 2, today the dashboard/server and the agent run side by side but do
+not exchange tasks. Use Telegram (after fixing 1) to drive the agent.
+
+## Target workflows (design goals, not all independently verified)
 
 1. Open Chrome, search Google, open a result, save page as PDF.
-2. Open Notepad, type text, save file to Desktop. ✅
-3. Correct misspelled app names (e.g. "crome" → "chrome"). ✅
+2. Open Notepad, type text, save file to Desktop.
+3. Correct misspelled app names (e.g. "crome" → "chrome").
 4. Find files with incorrect paths.
 5. Download, move to Documents, send via Telegram.
 6. Open an unfamiliar app and discover how to interact with it.
