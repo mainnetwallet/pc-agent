@@ -49,8 +49,12 @@ function Pairing({ onPaired }: { onPaired: () => void }) {
   const submit = async (e: FormEvent) => {
     e.preventDefault(); setBusy(true); setError("");
     try {
-      const data = await (await api.pair(name)).json();
-      if (!data.token) throw new Error("The server didn't return a token.");
+      const res = await api.pair(name);
+      const data = await res.json();
+      if (!res.ok || !data.token) {
+        const d = data?.detail;
+        throw new Error(typeof d === "string" ? d : d?.[0]?.msg || `The server refused the request (HTTP ${res.status}).`);
+      }
       setToken(data.token); onPaired();
     } catch (x: any) {
       setError(x.message === "Failed to fetch" ? "Can't reach the server on port 8000. Start it with “pc”, then try again." : x.message || "Pairing failed.");
@@ -183,12 +187,10 @@ function Note({ title, children }: { title: string; children: ReactNode }) {
 }
 
 function Settings() {
-  const [name, setName] = useState("");
-  useEffect(() => { api.me().then(r => r.json()).then(d => setName(d?.name ?? "")).catch(() => { /* optional */ }); }, []);
   return (
     <div className="note">
       <h2>This browser</h2>
-      <p>{name ? <>Paired as <b>{name}</b>.</> : "Paired with a revocable token."} Log out to remove the token from this browser.</p>
+      <p>Paired with a revocable token. Log out to remove the token from this browser.</p>
       <button className="danger" onClick={logout}>Log out</button>
       <h2>Agent settings</h2>
       <p>The model provider, Telegram bot token and allowed Telegram IDs are set in the <code>.env</code> file on the PC. Restart with <code>pc</code> after changing them.</p>
@@ -197,14 +199,9 @@ function Settings() {
 }
 
 export default function App() {
-  const [auth, setAuth] = useState<"checking" | "in" | "out">("checking");
+  const [auth, setAuth] = useState<"in" | "out">(() => localStorage.getItem("pc_agent_token") ? "in" : "out");
   const [view, setView] = useState("console");
   const [status, setStatus] = useState<Status | null>(null);
-
-  useEffect(() => {
-    if (!localStorage.getItem("pc_agent_token")) { setAuth("out"); return; }
-    api.me().then(() => setAuth("in")).catch(e => setAuth(e.message === "Unauthorized" ? "out" : "in"));
-  }, []);
 
   useEffect(() => {
     if (auth !== "in") return;
@@ -215,7 +212,6 @@ export default function App() {
     load(); const iv = setInterval(load, 4000); return () => clearInterval(iv);
   }, [auth]);
 
-  if (auth === "checking") return null;
   if (auth === "out") return <Pairing onPaired={() => setAuth("in")} />;
 
   return (

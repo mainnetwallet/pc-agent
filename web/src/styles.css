@@ -87,3 +87,4 @@ main{padding:28px clamp(16px,3vw,40px);max-width:1280px}
   .row{flex-direction:column}
 }
 @media(prefers-reduced-motion:reduce){*{animation:none!important}}
+.pair .err{margin:-4px 0 12px}

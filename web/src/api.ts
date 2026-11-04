@@ -12,7 +12,7 @@ async function request(path: string, opts: any = {}) {
 }
 
 export const api = {
-  pair: (name: string) => request("/devices/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }),
+  pair: (name: string) => request("/devices/pair", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(name) /* server declares `name: str = Body(...)`, so it expects the bare JSON string */ }),
   me: () => request("/devices/me"),
   status: () => request("/pc/status"),
   screenshot: () => request("/pc/screenshot"),
