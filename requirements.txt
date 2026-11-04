@@ -16,4 +16,3 @@ python-dotenv==1.2.4
 send2trash==2.1.0
 pystray==0.19.5
 httpx==0.28.1
-playwright==1.64.1

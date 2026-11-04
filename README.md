@@ -25,7 +25,6 @@ agent/            Windows agent (Python)
   core/           agent, reasoning loop, executor
   control/        desktop, filesystem, terminal, system, windows
   discovery/      tool registry, application adapters
-  browser/        Chrome/Edge/Firefox automation (Playwright)
   tasks/          task engine
   recovery/       self-recovery engine
   screen/         screen capture & recording
@@ -73,8 +72,8 @@ Then open a **new PowerShell window** (so the updated PATH is picked up).
 pc
 ```
 
-The first run creates the virtualenv, installs Python/npm packages and
-Playwright, then starts the **backend (port 8000)**, **frontend (port 5173)**
+The first run creates the virtualenv, installs the Python/npm packages,
+then starts the **backend (port 8000)**, **frontend (port 5173)**
 and the **agent** together and opens the dashboard at http://localhost:5173.
 Press `Ctrl+C` to stop everything.
 
@@ -105,9 +104,6 @@ python -m venv .venv
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install Playwright Chromium browser
-python -m playwright install chromium
-
 # Copy and edit the environment file
 copy .env.example .env
 # Edit .env: set TELEGRAM_BOT_TOKEN and OWNER_TELEGRAM_IDS at minimum
@@ -123,7 +119,6 @@ Core Python dependencies:
 pyautogui mss Pillow pywin32 pygetwindow psutil python-telegram-bot
 fastapi uvicorn python-multipart python-socketio websockets pytesseract
 opencv-python-headless python-dotenv send2trash pystray httpx
-playwright
 ```
 
 ## Startup commands

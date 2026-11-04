@@ -17,7 +17,6 @@ from control.windows import windows
 from control.filesystem import fs
 from control.system import system
 from control.terminal import terminal
-from browser.chrome import browser as browser_control
 from screen.capture import capture_engine
 from discovery.registry import registry
 from tasks.engine import task_engine

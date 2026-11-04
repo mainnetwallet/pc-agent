@@ -25,13 +25,12 @@ os.environ.setdefault("LOGS_DIR", os.path.join(_TMP, "logs"))
 def _install_control_stubs():
     try:
         import control.desktop  # noqa: F401
-        import browser.chrome  # noqa: F401
         import screen.capture  # noqa: F401
         return  # real libraries are available (Windows)
     except Exception:
         pass
     for name in list(sys.modules):
-        if name.split(".")[0] in ("control", "browser", "screen"):
+        if name.split(".")[0] in ("control", "screen"):
             del sys.modules[name]
 
     def pkg(name):
@@ -45,14 +44,13 @@ def _install_control_stubs():
             setattr(m, k, v)
         sys.modules[name] = m
 
-    for p in ("control", "browser", "screen"):
+    for p in ("control", "screen"):
         pkg(p)
     mod("control.desktop", DesktopControl=mock.MagicMock)
     mod("control.windows", windows=mock.MagicMock(), discover_installed_apps=mock.MagicMock())
     mod("control.filesystem", fs=mock.MagicMock())
     mod("control.system", system=mock.MagicMock())
     mod("control.terminal", terminal=mock.MagicMock())
-    mod("browser.chrome", browser=mock.MagicMock())
     mod("screen.capture", capture_engine=mock.MagicMock())
 
 

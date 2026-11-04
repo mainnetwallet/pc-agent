@@ -26,7 +26,6 @@ python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install --upgrade pip
 pip install -r requirements.txt
-python -m playwright install chromium --with-deps
 ```
 
 ## 4. Configure

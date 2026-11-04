@@ -28,7 +28,6 @@ if not exist ".venv\.deps_installed" (
     echo [setup] Installing Python packages ^(first run only^)...
     ".venv\Scripts\python.exe" -m pip install --upgrade pip
     ".venv\Scripts\python.exe" -m pip install -r requirements.txt || goto :fail
-    ".venv\Scripts\python.exe" -m playwright install chromium
     echo done> ".venv\.deps_installed"
 )
 
