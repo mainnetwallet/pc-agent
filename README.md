@@ -66,7 +66,7 @@ then starts the **backend (port 8000)**, **frontend (port 5173)** and the
 **agent** together, and opens the dashboard. Press `Ctrl+C` to stop all.
 
 Even shorter: run `.\pc.cmd install` once, open a new PowerShell, then just type
-`pc run` (works from any folder).
+`pc` (works from any folder; `pc run` also works).
 
 Options: `.\start.bat --no-agent`, `--no-web`, `--no-server`, `--no-browser`.
 Re-run dependency install by deleting `.venv\.deps_installed`.
