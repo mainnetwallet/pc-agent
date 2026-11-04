@@ -81,6 +81,14 @@ MAX_RETRIES = _env_int("MAX_RETRIES", 3)
 RETRY_BASE_BACKOFF = _env_int("RETRY_BASE_BACKOFF", 2)  # seconds
 
 # ---------------------------------------------------------------------------
+# Reasoning loop (multi-call LLM agent)
+# ---------------------------------------------------------------------------
+AGENT_MAX_ITERATIONS = _env_int("AGENT_MAX_ITERATIONS", 25)  # LLM turns per task
+AGENT_MAX_ACTIONS_PER_TURN = _env_int("AGENT_MAX_ACTIONS_PER_TURN", 3)
+AGENT_HISTORY_WINDOW = _env_int("AGENT_HISTORY_WINDOW", 8)  # recent actions shown in detail
+AGENT_OBSERVE_OCR = _env_bool("AGENT_OBSERVE_OCR", True)  # add OCR text to each observation
+
+# ---------------------------------------------------------------------------
 # Desktop control
 # ---------------------------------------------------------------------------
 DESKTOP_INPUT_LOCK = _env_bool("DESKTOP_INPUT_LOCK", True)
@@ -131,7 +139,9 @@ __all__ = [
     "RELAY_RECONNECT_INTERVAL", "LLM_PROVIDER", "LLM_API_KEY", "LLM_BASE_URL",
     "LLM_MODEL", "LLM_TEMPERATURE", "LLM_MAX_TOKENS", "LLM_ENABLE_VISION",
     "TASK_DB_PATH", "TASK_EXECUTION_TIMEOUT", "STUCK_STATE_THRESHOLD",
-    "MAX_RETRIES", "RETRY_BASE_BACKOFF", "DESKTOP_INPUT_LOCK",
+    "MAX_RETRIES", "RETRY_BASE_BACKOFF", "AGENT_MAX_ITERATIONS",
+    "AGENT_MAX_ACTIONS_PER_TURN", "AGENT_HISTORY_WINDOW", "AGENT_OBSERVE_OCR",
+    "DESKTOP_INPUT_LOCK",
     "SCREENSHOT_QUALITY", "SCREENSHOT_MAX_DIMENSION", "PYAUTOGUI_PAUSE",
     "PYAUTOGUI_FAILSAFE", "SCREEN_CAPTURE_FPS", "SCREEN_CAPTURE_QUALITY",
     "SCREEN_CAPTURE_MONITOR", "SCREEN_CAPTURE_ENABLED", "STREAMING_INDICATOR",

@@ -213,6 +213,32 @@ Web dashboard (5173) --/api,/ws--> Relay server (8000) <--ws /agent/connect-- Ag
 * `/pc/screenshot` captures the screen of the machine the server runs on, so
   run the server on the Windows PC.
 
+### How a task runs (LLM reasoning loop)
+
+With `LLM_API_KEY` set, the agent does **not** make one blind plan. It runs a loop
+(`agent/core/loop.py`): every turn the LLM is called with a compact prompt built from
+the task state:
+
+* the goal and any corrections you sent while the task runs (`/message`)
+* its **checklist** (own plan, each item `pending / done / failed / skipped`)
+* its **notes** (facts it wants to remember)
+* the **recent actions with their real results** (older ones are compressed)
+* a **fresh observation** of the PC (active window, open windows, OCR text, screenshot)
+
+It replies with JSON (checklist updates, up to `AGENT_MAX_ACTIONS_PER_TURN` actions,
+status `continue | done | failed | needs_user`). The actions run, their results are
+stored in the state, and the LLM is called again until it finishes. So "open an app
+and do X in it" becomes several calls, each one seeing what the previous one did.
+
+The state is saved on every turn (`task.metadata["state"]`, `checkpoints` table, and the
+checklist as `task.plan` for the dashboard). Guards: `AGENT_MAX_ITERATIONS`, stop/pause
+between turns and between actions, abort after 5 identical or 5 failing actions in a row,
+and a `done` is pushed back once if checklist items are still pending. Task summaries are
+saved to conversation memory so the next task knows what was done before.
+
+Without an LLM key the agent falls back to the rule-based planner and runs its plan
+open-loop (basic tasks only).
+
 Known limitations:
 
 1. Tasks started from Telegram are not mirrored in the dashboard.

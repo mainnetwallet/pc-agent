@@ -151,8 +151,11 @@ class TaskEngine:
 
     def release_desktop_lock(self, task_id: str) -> None:
         with self._lock:
-            if self._desktop_lock_holder == task_id:
-                self._desktop_lock_holder = None
+            if self._desktop_lock_holder != task_id:
+                # Already released (stop()/cleanup frees the lock of a stopped task), or held
+                # by another task now. Releasing here would raise or free someone else's lock.
+                return
+            self._desktop_lock_holder = None
         self._desktop_lock.release()
 
     def desktop_lock_holder(self) -> Optional[str]:
@@ -251,6 +254,65 @@ class TaskEngine:
                 msgs.append(message)
                 task.metadata["corrections"] = msgs
                 task.updated_at = time.time()
+
+    # --------------------------------------------------------------- run-time control helpers
+    def stop_requested(self, task_id: str) -> bool:
+        """True once the task was stopped. stop() pops the stop event during cleanup,
+        so the CANCELLED status is checked as well (the event alone is not reliable)."""
+        ev = self._stop_events.get(task_id)
+        if ev is not None and ev.is_set():
+            return True
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return task is not None and task.status == TaskStatus.CANCELLED
+
+    def wait_if_paused(self, task_id: str, poll: float = 0.5) -> bool:
+        """Block while the task is paused. Returns True if it was stopped meanwhile."""
+        while True:
+            if self.stop_requested(task_id):
+                return True
+            ev = self._paused.get(task_id)
+            if ev is None or ev.is_set():
+                return False
+            time.sleep(poll)
+
+    def get_corrections(self, task_id: str) -> List[str]:
+        """Messages the user injected while the task was running (oldest first)."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            return list(task.metadata.get("corrections", [])) if task else []
+
+    def update_progress(self, task_id: str, plan: Optional[Dict] = None,
+                        state: Optional[Dict] = None) -> None:
+        """Publish live progress: the checklist (as task.plan) and the loop state."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return
+            if plan is not None:
+                task.plan = plan
+            if state is not None:
+                task.metadata["state"] = state
+            task.updated_at = time.time()
+            instruction, status = task.instruction, task.status.value
+        recovery.mark_progress(task_id)
+        if state is not None:
+            memory.save_checkpoint(task_id, "loop_state", state)
+        if plan is not None:
+            memory.save_task(task_id, instruction, status, plan=plan)
+
+    def needs_user(self, task_id: str, message: str) -> None:
+        """The agent cannot continue without the user (login, missing info, decision)."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return
+            task.status = TaskStatus.NEEDS_USER_ACTION
+            task.result = message
+            task.updated_at = time.time()
+        memory.save_task(task_id, task.instruction, "NEEDS_USER_ACTION", result=message)
+        memory.audit(task_id, "task.needs_user", {"message": message})
+        self._cleanup_task(task_id)
 
     def _cleanup_task(self, task_id: str) -> None:
         with self._lock:

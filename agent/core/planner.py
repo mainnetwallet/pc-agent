@@ -65,8 +65,12 @@ class Planner:
         # Correct app-name typos mentioned in the instruction
         corrected = instruction
         for wrong, right in APP_CORRECTIONS.items():
-            if wrong in corrected.lower():
-                corrected = re.sub(re.escape(wrong), right, corrected, flags=re.IGNORECASE)
+            if wrong == right:
+                continue
+            # Whole words only: a bare substring match turned "apps" into "apowershell"
+            pattern = r"\b" + re.escape(wrong) + r"\b"
+            if re.search(pattern, corrected, flags=re.IGNORECASE):
+                corrected = re.sub(pattern, right, corrected, flags=re.IGNORECASE)
                 assumptions.append(f"Corrected '{wrong}' -> '{right}'")
 
         # Resolve contextual references using memory/context

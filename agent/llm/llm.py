@@ -65,9 +65,82 @@ class LLM:
                     tool_calls=[])
         return self._fallback(messages, tools)
 
+    # ------------------------------------------------------------ strict chat (reasoning loop)
+    @property
+    def available(self) -> bool:
+        """True when a real provider is configured (API key set, provider != mock)."""
+        return self.provider != "mock" and bool(self.api_key)
+
+    def chat_strict(self, messages: List[Dict[str, str]],
+                    images: Optional[List[str]] = None,
+                    temperature: Optional[float] = None,
+                    max_tokens: Optional[int] = None) -> LLMResponse:
+        """Like chat(), but raises on provider errors instead of silently falling
+        back to the rule-based planner. The reasoning loop needs real errors so it
+        can retry, drop the screenshot, or fail the task visibly.
+
+        images: optional screenshot file paths attached to the last user message.
+        """
+        if not self.available:
+            raise RuntimeError("LLM not configured (set LLM_API_KEY and LLM_PROVIDER)")
+        if self.provider in ("openai", "custom"):
+            return self._chat_openai(messages, None, "none", temperature, max_tokens,
+                                     images=images)
+        if self.provider == "anthropic":
+            return self._chat_anthropic(messages, None, temperature, max_tokens,
+                                        images=images)
+        raise RuntimeError(f"Unsupported LLM provider: {self.provider}")
+
+    @staticmethod
+    def _encode_image(path: str):
+        """Return (base64, media_type) for a screenshot, downscaled to save tokens."""
+        import base64
+        import io
+        try:
+            from PIL import Image
+            with Image.open(path) as im:
+                im = im.convert("RGB")
+                im.thumbnail((1280, 1280))
+                buf = io.BytesIO()
+                im.save(buf, format="JPEG", quality=70)
+            return base64.b64encode(buf.getvalue()).decode(), "image/jpeg"
+        except Exception:
+            try:
+                with open(path, "rb") as f:
+                    return base64.b64encode(f.read()).decode(), "image/png"
+            except Exception:
+                return None
+
+    def _attach_images(self, messages, images, style: str):
+        """Return a copy of messages with screenshots added to the last user message."""
+        if not images:
+            return messages
+        encoded = [e for e in (self._encode_image(p) for p in images) if e]
+        if not encoded:
+            return messages
+        out = [dict(m) for m in messages]
+        for i in range(len(out) - 1, -1, -1):
+            if out[i]["role"] != "user":
+                continue
+            text = out[i]["content"]
+            if style == "openai":
+                parts = [{"type": "text", "text": text}] + [
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:{mt};base64,{b64}"}}
+                    for b64, mt in encoded]
+            else:  # anthropic
+                parts = [{"type": "image",
+                          "source": {"type": "base64", "media_type": mt, "data": b64}}
+                         for b64, mt in encoded] + [{"type": "text", "text": text}]
+            out[i]["content"] = parts
+            break
+        return out
+
     # ------------------------------------------------------------ OpenAI-compatible
-    def _chat_openai(self, messages, tools, tool_choice, temperature, max_tokens):
+    def _chat_openai(self, messages, tools, tool_choice, temperature, max_tokens,
+                     images=None):
         import httpx
+        messages = self._attach_images(messages, images, "openai")
         base = self.base_url or "https://api.openai.com/v1"
         url = base.rstrip("/") + "/chat/completions"
         headers = {"Content-Type": "application/json"}
@@ -98,8 +171,9 @@ class LLM:
         return LLMResponse(text=msg.get("content", "") or "", tool_calls=tool_calls, raw=data)
 
     # ------------------------------------------------------------ Anthropic
-    def _chat_anthropic(self, messages, tools, temperature, max_tokens):
+    def _chat_anthropic(self, messages, tools, temperature, max_tokens, images=None):
         import httpx
+        messages = self._attach_images(messages, images, "anthropic")
         base = self.base_url or "https://api.anthropic.com/v1"
         url = base.rstrip("/") + "/messages"
         headers = {

@@ -1,8 +1,13 @@
-"""Executor: carries out a plan through registered tools.
+"""Executor: carries out tool calls through the registry.
 
-Selects appropriate tools, executes steps, verifies outcomes, and handles
-ordinary errors via the recovery engine. GUI operations hold the exclusive
-desktop input lock.
+Two entry points:
+  * execute_action(...)  - ONE tool call for the reasoning loop (core.loop). It never
+                           guesses missing arguments and always returns a normalized
+                           {"ok", "tool", "result"/"error"} dict so failures reach the LLM.
+  * execute_plan(...)    - legacy open-loop runner for a pre-built plan (used only by the
+                           rule-based fallback when no LLM is configured).
+
+GUI operations hold the exclusive desktop input lock.
 """
 
 import os
@@ -23,11 +28,72 @@ from recovery.recovery import recovery
 from memory.sqlite_store import memory
 
 
+# LLM-invented argument names -> candidate real names (first one the tool expects wins).
+_ARG_ALIASES = {
+    "command": ["app_name_or_path"],
+    "application_name": ["app_name_or_path"],
+    "app": ["app_name_or_path"],
+    "program": ["app_name_or_path"],
+    "message": ["text"],
+    "content_text": ["text"],
+    "input_text": ["text"],
+    "key_combo": ["keys"],
+    "file_path": ["path"],
+    "target_path": ["path"],
+    "source_path": ["src", "path"],
+    "source": ["src"],
+    "from": ["src"],
+    "dest_path": ["dst", "path"],
+    "destination": ["dst"],
+    "dest": ["dst"],
+    "to": ["dst"],
+}
+
+# Only these arguments are file paths that may be "found" when slightly wrong.
+# Free text (type_text, file content, shell commands) must never be rewritten.
+_PATH_ARGS = {"path", "src", "dst", "app_name_or_path"}
+
+
 class Executor:
     def __init__(self):
         self.desktop = DesktopControl()
 
-    # --------------------------------------------------------------- entry point
+    # ------------------------------------------------------- single action (reasoning loop)
+    def execute_action(self, tool: str, arguments: Dict[str, Any], task, engine) -> Dict[str, Any]:
+        """Run one tool call. Returns {"ok": bool, "tool": str, "result"|"error": ...}."""
+        mapped = self._map_tool(tool)
+        if not mapped or not registry.has_tool(mapped):
+            return {"ok": False, "tool": tool,
+                    "error": f"Unknown tool '{tool}'. Use one of the listed tools."}
+        try:
+            args = self._resolve_args(arguments or {}, {"tool": mapped}, task, engine, infer=False)
+            if mapped.startswith("desktop."):
+                if not engine.acquire_desktop_lock(task.id, timeout=10.0):
+                    return {"ok": False, "tool": mapped,
+                            "error": "Could not acquire desktop input lock"}
+                try:
+                    raw = registry.execute(mapped, args, caller_level="owner")
+                finally:
+                    engine.release_desktop_lock(task.id)
+            else:
+                raw = registry.execute(mapped, args, caller_level="owner")
+        except Exception as e:
+            return {"ok": False, "tool": mapped, "error": f"{type(e).__name__}: {e}"}
+        return self._normalize(mapped, raw)
+
+    @staticmethod
+    def _normalize(tool: str, raw: Dict[str, Any]) -> Dict[str, Any]:
+        """registry.execute reports failures as {"ok": False}; adapters may also return
+        {"ok": False} inside a successful call. Treat both as failures."""
+        if not raw.get("ok"):
+            return {"ok": False, "tool": tool, "error": raw.get("error") or "tool failed"}
+        out = raw.get("result")
+        if isinstance(out, dict) and out.get("ok") is False:
+            return {"ok": False, "tool": tool, "result": out,
+                    "error": str(out.get("error") or "tool reported failure")}
+        return {"ok": True, "tool": tool, "result": out}
+
+    # --------------------------------------------------------------- legacy plan runner
     def execute_plan(self, task, engine) -> str:
         plan = task.plan or {}
         steps = plan.get("execution_steps", []) or []
@@ -38,22 +104,17 @@ class Executor:
 
         results: List[str] = []
         for idx, step in enumerate(steps):
-            if engine._stop_events.get(task.id, threading.Event()).is_set():
+            # Blocks while paused; True means the task was stopped.
+            if engine.wait_if_paused(task.id):
                 return "Task stopped by user."
-            # pause handling
-            pause_ev = engine._paused.get(task.id)
-            while pause_ev and not pause_ev.is_set():
-                time.sleep(0.5)
-                if engine._stop_events.get(task.id, threading.Event()).is_set():
-                    return "Task stopped by user."
 
-            engine.step_started(task.id, idx, step.get("tool", ""), step.get("action", ""))
+            step_id = engine.step_started(task.id, idx, step.get("tool", ""), step.get("action", ""))
             try:
                 outcome = self._execute_step(step, task, engine)
-                engine.step_finished(0, "COMPLETED", result=str(outcome))
+                engine.step_finished(step_id, "COMPLETED", result=str(outcome))
                 results.append(f"Step {idx+1} ({step.get('action')}): {outcome}")
             except Exception as e:
-                engine.step_finished(0, "FAILED", error=str(e))
+                engine.step_finished(step_id, "FAILED", error=str(e))
                 # Attempt recovery
                 strategy = recovery.recover(task.id, e, {"step": step})
                 # Try bounded retry of the step
@@ -67,7 +128,6 @@ class Executor:
     # --------------------------------------------------------------- step execution
     def _execute_step(self, step: Dict, task, engine) -> Any:
         tool = step.get("tool")
-        action = step.get("action", "")
         arguments = step.get("arguments", {}) or {}
 
         # Resolve arguments: replace placeholder references
@@ -81,11 +141,17 @@ class Executor:
             if not engine.acquire_desktop_lock(task.id, timeout=10.0):
                 raise RuntimeError("Could not acquire desktop input lock")
             try:
-                return registry.execute(tool, arguments, caller_level="owner")
+                raw = registry.execute(tool, arguments, caller_level="owner")
             finally:
                 engine.release_desktop_lock(task.id)
         else:
-            return registry.execute(tool, arguments, caller_level="owner")
+            raw = registry.execute(tool, arguments, caller_level="owner")
+
+        # A tool that reports failure must not count as a completed step.
+        norm = self._normalize(tool or "", raw)
+        if not norm["ok"]:
+            raise RuntimeError(norm["error"])
+        return raw
 
     @staticmethod
     def _map_tool(tool: Optional[str]) -> Optional[str]:
@@ -124,28 +190,15 @@ class Executor:
         return registry.execute(tool, arguments, caller_level="owner")
 
     # --------------------------------------------------------------- argument resolution
-    def _resolve_args(self, args: Dict, step: Dict, task, engine) -> Dict:
-        tool = step.get("tool")
-        tool = self._map_tool(tool)
-        resolved = {}
+    def _resolve_args(self, args: Dict, step: Dict, task, engine, infer: bool = True) -> Dict:
+        """Map LLM argument names onto the tool's schema and resolve placeholders.
 
-        # Argument name mapping: LLM-invented names -> schema names
-        arg_map = {
-            "command": "app_name_or_path",
-            "application_name": "app_name_or_path",
-            "app": "app_name_or_path",
-            "program": "app_name_or_path",
-            "message": "text",
-            "content_text": "text",
-            "input_text": "text",
-            "keys": "keys",
-            "key_combo": "keys",
-            "file_path": "path",
-            "target_path": "path",
-            "source_path": "path",
-            "dest_path": "dst",
-            "destination": "dst",
-        }
+        infer=True  (legacy plans): missing required arguments are guessed from the task.
+        infer=False (reasoning loop): never guess; the registry reports the missing
+                    argument and the LLM fixes it on the next turn.
+        """
+        tool = self._map_tool(step.get("tool"))
+        resolved: Dict[str, Any] = {}
 
         # Get the tool's input schema to know expected argument names
         schema = registry.get_tool(tool) if tool else None
@@ -153,38 +206,36 @@ class Executor:
         if schema:
             expected_props = set(schema.input_schema.get("properties", {}).keys())
 
-        # Map provided arguments to expected names
         for k, v in args.items():
-            mapped_k = arg_map.get(k, k)
-            # Only keep if it's an expected property or we don't have a schema
-            if not expected_props or mapped_k in expected_props:
-                resolved[mapped_k] = v
+            if expected_props and k in expected_props:
+                mapped_k = k  # already a real argument name: never rename it
             else:
-                # Still keep it; the schema validation may be lenient
-                resolved[mapped_k] = v
+                candidates = _ARG_ALIASES.get(k, [])
+                if expected_props:
+                    mapped_k = next((c for c in candidates if c in expected_props), k)
+                else:
+                    mapped_k = candidates[0] if candidates else k
+            resolved[mapped_k] = v
 
-        # Fill in missing required arguments from context
-        required = []
-        if schema:
-            required = schema.input_schema.get("required", [])
-        for req in required:
-            if req not in resolved or not resolved[req]:
-                inferred = self._infer_argument(req, tool, step, task, engine)
-                if inferred is not None:
-                    resolved[req] = inferred
+        if infer:
+            required = schema.input_schema.get("required", []) if schema else []
+            for req in required:
+                if req not in resolved or not resolved[req]:
+                    inferred = self._infer_argument(req, tool, step, task, engine)
+                    if inferred is not None:
+                        resolved[req] = inferred
 
-        # Resolve string values (placeholders, paths)
         final = {}
         for k, v in resolved.items():
             if isinstance(v, str):
-                final[k] = self._resolve_string(v, task, engine)
+                final[k] = self._resolve_string(v, task, engine, resolve_path=(k in _PATH_ARGS))
             else:
                 final[k] = v
         return final
 
     def _infer_argument(self, arg_name: str, tool: Optional[str],
                         step: Dict, task, engine) -> Optional[str]:
-        """Infer a missing required argument from instruction/action context."""
+        """Infer a missing required argument from instruction/action context (legacy only)."""
         instruction = task.instruction.lower()
         action = step.get("action", "").lower()
 
@@ -232,10 +283,12 @@ class Executor:
 
         return None
 
-    def _resolve_string(self, s: str, task, engine) -> str:
+    def _resolve_string(self, s: str, task, engine, resolve_path: bool = True) -> str:
         # Resolve {instruction}, {task_id}, etc.
         s = s.replace("{instruction}", task.instruction)
         s = s.replace("{task_id}", task.id)
+        if not resolve_path:
+            return s
         # Resolve file paths via filesystem finder (tolerates incorrect paths)
         from control.filesystem import fs
         # If it looks like a path, try to find it
