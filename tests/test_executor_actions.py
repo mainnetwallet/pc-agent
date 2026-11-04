@@ -1,4 +1,4 @@
-"""Tests for the executor / task-engine / planner fixes that the reasoning loop relies on.
+"""Tests for the executor / task-engine fixes that the reasoning loop relies on.
 
 Uses the real tool registry, task engine and SQLite memory (in a temp dir). Only the
 OS-level control libraries are stubbed when they cannot be imported (non-Windows), so
@@ -59,7 +59,6 @@ def _install_control_stubs():
 _install_control_stubs()
 
 from core.executor import Executor, executor  # noqa: E402
-from core.planner import planner  # noqa: E402
 from discovery.registry import registry  # noqa: E402
 from tasks.engine import task_engine  # noqa: E402
 from memory.sqlite_store import memory  # noqa: E402
@@ -126,7 +125,7 @@ class TestExecuteAction(unittest.TestCase):
         self.assertIn("Unknown tool", res["error"])
 
     def test_missing_required_argument_is_not_guessed(self):
-        # The legacy path would silently default this to "Notepad".
+        # A missing argument must go back to the LLM, never be defaulted (e.g. to "Notepad").
         res = self.run_action("desktop.fake_launch", {})
         self.assertFalse(res["ok"])
         self.assertIn("app_name_or_path", res["error"])
@@ -146,13 +145,6 @@ class TestExecuteAction(unittest.TestCase):
             res = self.run_action("desktop.fake_type", {"text": "hi"})
             self.assertTrue(res["ok"], res)
         self.assertIsNone(task_engine.desktop_lock_holder())
-
-    def test_legacy_step_raises_when_a_tool_reports_failure(self):
-        # The old runner counted {"ok": False} results as completed steps.
-        step = {"tool": "filesystem.fake_fail", "arguments": {"path": "p1"}}
-        with self.assertRaises(RuntimeError) as cm:
-            Executor()._execute_step(step, self.task, task_engine)
-        self.assertIn("disk full", str(cm.exception))
 
 
 class TestEngineControl(unittest.TestCase):
@@ -215,17 +207,6 @@ class TestEngineControl(unittest.TestCase):
         task_engine.complete(b, "done")
 
 
-class TestPlannerCorrections(unittest.TestCase):
-    def test_typo_in_app_name_is_still_corrected(self):
-        out = planner.interpret("Open crome", "")
-        self.assertEqual(out["interpreted_goal"], "Open chrome")
-
-    def test_words_that_contain_an_alias_are_left_alone(self):
-        # "apps" contains "ps", "off" contains "ff": substring matching used to corrupt them.
-        out = planner.interpret("open my apps folder and turn off the offer", "")
-        self.assertEqual(out["interpreted_goal"], "open my apps folder and turn off the offer")
-
-
 class _ScriptedLLM:
     available = True
 
@@ -264,11 +245,6 @@ class TestAgentRunTask(unittest.TestCase):
                                                                            "app": app_name_or_path},
                           "launch", input_schema=_schema({"app_name_or_path": {"type": "string"}},
                                                          ["app_name_or_path"]))
-        registry.register("desktop.launch_application",
-                          lambda app_name_or_path: cls.state["launch"](app_name_or_path),
-                          "launch (legacy path)",
-                          input_schema=_schema({"app_name_or_path": {"type": "string"}},
-                                               ["app_name_or_path"]))
         registry.register("desktop.fake_stop",
                           lambda: (task_engine.stop(cls.state["tid"]), {"ok": True})[1],
                           "stops its own task", input_schema=_schema({}, []))
@@ -335,25 +311,14 @@ class TestAgentRunTask(unittest.TestCase):
         self.assertEqual(t["status"], "NEEDS_USER_ACTION")
         self.assertTrue(t["result"].startswith("Password dao"))
 
-    def _legacy(self, launch):
-        self.state["launch"] = launch
-        import core.planner as planner_module
-        # Force the rule-based planner even if a real key is configured in .env
-        with mock.patch.multiple(planner_module.llm, provider="mock", api_key=""):
-            return self.run_task("open notepad", types.SimpleNamespace(available=False))
-
-    def test_without_llm_the_rule_based_path_still_works(self):
-        tid, text = self._legacy(lambda app: {"ok": True, "launched": app})
-        self.assertEqual(task_engine.get_task(tid)["status"], "COMPLETED")
-        self.assertIn("OBSERVE", text)
-        self.assertIn("PLAN", text)
-        self.assertIn("ACT", text)
-
-    def test_without_llm_a_failing_step_fails_the_task(self):
-        # Used to end COMPLETED: the failure was swallowed and the verdict ignored.
-        tid, text = self._legacy(lambda app: {"ok": False, "error": "no such app"})
-        self.assertEqual(task_engine.get_task(tid)["status"], "FAILED")
-        self.assertIn("VERIFY: FAIL", text)
+    def test_without_llm_the_task_fails_with_a_clear_error_and_runs_nothing(self):
+        # No rule-based planner: with no LLM nothing may be guessed or executed.
+        tid, text = self.run_task("open notepad", types.SimpleNamespace(available=False))
+        t = task_engine.get_task(tid)
+        self.assertEqual(t["status"], "FAILED")
+        self.assertIn("LLM not configured", t["error"])
+        self.assertIn("LLM not configured", text)
+        self.assertEqual(memory.get_task_steps(tid), [])
 
 
 if __name__ == "__main__":

@@ -433,9 +433,6 @@ _CHAT_SYSTEM = (
     '{"action":"task","instruction":"<clear instruction in English>","reply":"<one short sentence confirming it, in the same language as the user>"}. '
     'For everything else reply with ONLY this JSON: {"action":"reply","reply":"<your answer>"}. '
 )
-_VERBS = ("open ", "launch ", "start ", "create ", "make ", "write ", "type ", "save ", "search ", "find ",
-          "download ", "move ", "copy ", "delete ", "close ", "run ", "take ", "send ", "click ", "play ",
-          "install ", "go to ")
 
 @app.post("/chat")
 def chat(req: ChatRequest, _auth=Depends(verify_api_key)):
@@ -449,27 +446,19 @@ def chat(req: ChatRequest, _auth=Depends(verify_api_key)):
     hist = [{"role": m.role, "content": m.content} for m in req.history[-10:] if m.role in ("user", "assistant")]
     while hist and hist[0]["role"] != "user":
         hist.pop(0)
-    resp = llm.chat([{"role": "system", "content": system}, *hist, {"role": "user", "content": text}],
-                    temperature=0.3, max_tokens=500)
+    try:
+        resp = llm.chat([{"role": "system", "content": system}, *hist, {"role": "user", "content": text}],
+                        temperature=0.3, max_tokens=500)
+    except Exception as e:  # not configured, provider down, bad key... surface it; never guess intent
+        logger.warning("chat: LLM call failed: %s", e)
+        raise HTTPException(status_code=503, detail=f"The language model isn't working: {e}")
     raw = (resp.text or "").strip()
-    working = bool(llm.api_key) and llm.provider != "mock" and not raw.startswith(("[FALLBACK", "[LLM provider error"))
     instruction, reply = None, raw
-    if working:
-        data = llm._extract_json(raw)
-        if data:
-            reply = str(data.get("reply") or "")
-            if data.get("action") == "task":
-                instruction = str(data.get("instruction") or "").strip() or None
-    else:
-        low = text.lower()
-        if low.startswith("task:"):
-            instruction = text[5:].strip() or None
-        elif low.startswith(_VERBS):
-            instruction = text
-        why = raw.splitlines()[0].strip("[]") if raw.startswith("[LLM provider error") else "check LLM_API_KEY in .env"
-        reply = "Creating that as a task." if instruction else (
-            f"I can't answer questions right now because the language model isn't working ({why}). "
-            "Tell me what to do on the PC, like 'Open Notepad', and I'll create a task.")
+    data = llm._extract_json(raw)
+    if data:
+        reply = str(data.get("reply") or "")
+        if data.get("action") == "task":
+            instruction = str(data.get("instruction") or "").strip() or None
     out = {"reply": reply or ("On it." if instruction else "The language model returned an empty reply."),
            "task_id": None, "status": None}
     if instruction:

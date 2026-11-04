@@ -63,7 +63,7 @@ RELAY_RECONNECT_INTERVAL = _env_int("RELAY_RECONNECT_INTERVAL", 5)
 # ---------------------------------------------------------------------------
 # LLM brain (provider-agnostic)
 # ---------------------------------------------------------------------------
-LLM_PROVIDER = _env("LLM_PROVIDER", "openai")  # openai | anthropic | custom | mock
+LLM_PROVIDER = _env("LLM_PROVIDER", "openai")  # openai | anthropic | custom
 LLM_API_KEY = _env("LLM_API_KEY", "")
 LLM_BASE_URL = _env("LLM_BASE_URL", "")
 LLM_MODEL = _env("LLM_MODEL", "gpt-4o-mini")

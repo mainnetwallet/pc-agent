@@ -1,15 +1,15 @@
 """LLM Brain - provider-agnostic language model layer.
 
-Supports OpenAI-compatible APIs, Anthropic native API, custom base URLs, and a
-built-in rule-based fallback (mock) mode so the agent works without an API key.
+Supports OpenAI-compatible APIs, the Anthropic native API and custom base URLs.
+There is NO rule-based or mock fallback: planning, intent resolution and every
+decision are made by the LLM. If no provider/API key is configured, or the provider
+fails, calls raise an error so the task fails visibly instead of being guessed.
 
 The LLM is the reasoning engine only; actual computer operations always execute
 through registered tools.
 """
 
 import json
-import os
-import re
 from typing import Any, Dict, List, Optional
 
 from config import (
@@ -37,59 +37,35 @@ class LLM:
         self._http = None  # lazy httpx client
 
     # ------------------------------------------------------------------ chat
-    def chat(self, messages: List[Dict[str, str]],
-             tools: Optional[List[Dict]] = None,
-             tool_choice: str = "auto",
-             temperature: Optional[float] = None,
-             max_tokens: Optional[int] = None,
-             stream: bool = False) -> LLMResponse:
-        if self.provider == "mock" or not self.api_key:
-            return self._fallback(messages, tools)
-        try:
-            if self.provider in ("openai", "custom"):
-                return self._chat_openai(messages, tools, tool_choice,
-                                         temperature, max_tokens)
-            if self.provider == "anthropic":
-                return self._chat_anthropic(messages, tools, temperature, max_tokens)
-        except Exception as e:  # provider error (e.g. tools not supported)
-            # Retry once without tools (plain text) before rule-based fallback
-            try:
-                if self.provider in ("openai", "custom"):
-                    return self._chat_openai(messages, None, "none",
-                                             temperature, max_tokens)
-                if self.provider == "anthropic":
-                    return self._chat_anthropic(messages, None, temperature, max_tokens)
-            except Exception as e2:
-                return LLMResponse(
-                    text=f"[LLM provider error: {e2}]\n" + self._fallback_text(messages),
-                    tool_calls=[])
-        return self._fallback(messages, tools)
+    SUPPORTED_PROVIDERS = ("openai", "custom", "anthropic")
 
-    # ------------------------------------------------------------ strict chat (reasoning loop)
     @property
     def available(self) -> bool:
-        """True when a real provider is configured (API key set, provider != mock)."""
-        return self.provider != "mock" and bool(self.api_key)
+        """True when a real provider is configured (supported provider + API key set)."""
+        return self.provider in self.SUPPORTED_PROVIDERS and bool(self.api_key)
 
-    def chat_strict(self, messages: List[Dict[str, str]],
-                    images: Optional[List[str]] = None,
-                    temperature: Optional[float] = None,
-                    max_tokens: Optional[int] = None) -> LLMResponse:
-        """Like chat(), but raises on provider errors instead of silently falling
-        back to the rule-based planner. The reasoning loop needs real errors so it
-        can retry, drop the screenshot, or fail the task visibly.
+    def chat(self, messages: List[Dict[str, str]],
+             images: Optional[List[str]] = None,
+             temperature: Optional[float] = None,
+             max_tokens: Optional[int] = None) -> LLMResponse:
+        """Send a conversation to the configured LLM and return its reply.
+
+        Raises on any problem (not configured, provider error) - there is no silent
+        fallback, so callers can retry, drop the screenshot, or fail the task visibly.
 
         images: optional screenshot file paths attached to the last user message.
         """
         if not self.available:
-            raise RuntimeError("LLM not configured (set LLM_API_KEY and LLM_PROVIDER)")
+            raise RuntimeError(
+                "LLM not configured: set LLM_API_KEY and LLM_PROVIDER "
+                "(openai | anthropic | custom) in .env")
         if self.provider in ("openai", "custom"):
             return self._chat_openai(messages, None, "none", temperature, max_tokens,
                                      images=images)
-        if self.provider == "anthropic":
-            return self._chat_anthropic(messages, None, temperature, max_tokens,
-                                        images=images)
-        raise RuntimeError(f"Unsupported LLM provider: {self.provider}")
+        return self._chat_anthropic(messages, None, temperature, max_tokens, images=images)
+
+    # Kept as an alias: the reasoning loop calls chat_strict().
+    chat_strict = chat
 
     @staticmethod
     def _encode_image(path: str):
@@ -214,89 +190,6 @@ class LLM:
                 })
         return LLMResponse(text=text, tool_calls=tool_calls, raw=data)
 
-    # ------------------------------------------------------------ rule-based fallback
-    def _fallback(self, messages, tools) -> LLMResponse:
-        user_text = ""
-        for m in reversed(messages):
-            if m["role"] == "user":
-                user_text = m["content"]
-                break
-        return LLMResponse(text=self._fallback_text(messages), tool_calls=self._fallback_tool_calls(user_text, tools))
-
-    def _fallback_text(self, messages) -> str:
-        user_text = ""
-        for m in reversed(messages):
-            if m["role"] == "user":
-                user_text = m["content"]
-                break
-        provider_status = f"provider={self.provider}, model={self.model}"
-        if not self.api_key:
-            provider_status += " (no API key)"
-        return (
-            f"[FALLBACK planner - {provider_status}]\n"
-            f"User instruction: {user_text}\n"
-            "Reasoning: Using built-in rule-based intent resolution. "
-            "Configure a working LLM provider for full autonomous reasoning."
-        )
-
-    def _fallback_tool_calls(self, user_text: str, tools) -> List[Dict]:
-        """Heuristic intent resolution producing candidate tool calls."""
-        calls: List[Dict] = []
-        text = user_text.lower()
-        # Tool name hints available
-        available = []
-        if tools:
-            for t in tools:
-                if isinstance(t, dict):
-                    available.append(t.get("name", "") or (t.get("function", {}) or {}).get("name", ""))
-                else:
-                    available.append(getattr(t, "name", ""))
-        available_set = set(available)
-
-        # Notepad: open + type + save
-        if "notepad" in text:
-            if available_set and "desktop.launch_application" in available_set:
-                pass  # handled by planner; here just note
-        return calls
-
-    # ------------------------------------------------------------ structured planning
-    def plan(self, instruction: str, context: str = "",
-             available_tools: Optional[List[Dict]] = None) -> Dict[str, Any]:
-        """Ask the LLM (or fallback) to produce an execution plan as JSON."""
-        # Build a list of available tool names for the LLM
-        tool_names = []
-        if available_tools:
-            for t in available_tools:
-                if isinstance(t, dict):
-                    name = t.get("name", "")
-                else:
-                    name = getattr(t, "name", "")
-                if name:
-                    tool_names.append(name)
-        tools_list = ", ".join(tool_names) if tool_names else "(none registered)"
-
-        system = (
-            "You are the planning engine of an autonomous Windows PC agent. "
-            "Given a user instruction and context, produce a JSON execution plan "
-            "with keys: interpreted_goal, assumptions, success_criteria, "
-            "required_tools, execution_steps, dependencies, risk_level. "
-            "execution_steps is a list of {step, tool, action, arguments}. "
-            "CRITICAL: You MUST only use tool names from the Available Tools list below. "
-            "Do not invent tool names. Available tools: " + tools_list + ". "
-            "If no suitable tool exists, use 'desktop.screenshot' or 'desktop.launch_application' as appropriate. "
-            "Be conservative and safe. Never include credentials."
-        )
-        messages = [
-            {"role": "system", "content": system},
-            {"role": "user", "content": f"Context: {context}\n\nInstruction: {instruction}\n\nAvailable tools: {available_tools or []}"},
-        ]
-        resp = self.chat(messages)
-        # Try to parse JSON from response
-        plan = self._extract_json(resp.text)
-        if plan is None:
-            plan = self._rule_based_plan(instruction, context, available_tools)
-        return plan
-
     @staticmethod
     def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         # Find the first {...} block
@@ -309,44 +202,6 @@ class LLM:
             except json.JSONDecodeError:
                 pass
         return None
-
-    @staticmethod
-    def _rule_based_plan(instruction, context, available_tools) -> Dict[str, Any]:
-        text = instruction.lower()
-        steps = []
-        tools_needed = []
-
-        def add_step(step, tool, action, args):
-            steps.append({"step": step, "tool": tool, "action": action, "arguments": args})
-            if tool and tool not in tools_needed:
-                tools_needed.append(tool)
-
-        if "notepad" in text:
-            add_step(1, "desktop.launch_application", "open notepad", {"app_name_or_path": "Notepad"})
-            if "type" in text or "write" in text:
-                add_step(2, "desktop.type_text", "type text", {"text": instruction})
-            if "save" in text:
-                add_step(3, "desktop.hotkey", "press Ctrl+S to save", {"keys": ["ctrl", "s"]})
-        elif any(w in text for w in ("open", "launch", "start")):
-            target = text
-            for w in ("open", "launch", "start", "the", "a", "an"):
-                target = target.replace(w, " ")
-            target = target.strip()
-            add_step(1, "desktop.launch_application", f"open {target}", {"app_name_or_path": target})
-        elif any(w in text for w in ("file", "folder", "directory", "document")):
-            add_step(1, "filesystem.list_folder", "list folder", {"path": os.path.expanduser("~")})
-        else:
-            add_step(1, "desktop.screenshot", "capture current screen", {"monitor_index": 0})
-
-        return {
-            "interpreted_goal": instruction,
-            "assumptions": ["Using rule-based fallback planner"],
-            "success_criteria": ["Action executed without error"],
-            "required_tools": tools_needed,
-            "execution_steps": steps,
-            "dependencies": [],
-            "risk_level": "low",
-        }
 
 
 # Singleton instance

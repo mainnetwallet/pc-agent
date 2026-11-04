@@ -22,7 +22,7 @@ queue, and standalone (no-cloud) mode.
 
 ```
 agent/            Windows agent (Python)
-  core/           agent, planner, executor
+  core/           agent, reasoning loop, executor
   control/        desktop, filesystem, terminal, system, windows
   discovery/      tool registry, application adapters
   browser/        Chrome/Edge/Firefox automation (Playwright)
@@ -50,8 +50,8 @@ docs/             guides
 * Node.js 18+ and npm
 * (Optional) Tesseract OCR for OCR features — install from
   https://github.com/UB-Mannheim/tesseract/wiki and set `TESSERACT_CMD`
-* (Optional) LLM API key for full reasoning; the agent works with a built-in
-  rule-based planner without one.
+* An LLM API key (`LLM_API_KEY`). Planning and every decision are made by the LLM;
+  there is no rule-based fallback, so tasks fail with a clear error without a key.
 
 ## Quick start (one command)
 
@@ -215,7 +215,7 @@ Web dashboard (5173) --/api,/ws--> Relay server (8000) <--ws /agent/connect-- Ag
 
 ### How a task runs (LLM reasoning loop)
 
-With `LLM_API_KEY` set, the agent does **not** make one blind plan. It runs a loop
+The agent does **not** make one blind plan. It runs a loop
 (`agent/core/loop.py`): every turn the LLM is called with a compact prompt built from
 the task state:
 
@@ -236,8 +236,9 @@ between turns and between actions, abort after 5 identical or 5 failing actions 
 and a `done` is pushed back once if checklist items are still pending. Task summaries are
 saved to conversation memory so the next task knows what was done before.
 
-Without an LLM key the agent falls back to the rule-based planner and runs its plan
-open-loop (basic tasks only).
+The agent is LLM-only: there is no rule-based planner or mock mode. Without a working
+LLM (`LLM_API_KEY` + `LLM_PROVIDER`) a task fails immediately with a clear error, and
+the dashboard chat answers with HTTP 503 instead of guessing the intent.
 
 Known limitations:
 

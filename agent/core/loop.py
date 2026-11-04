@@ -160,7 +160,6 @@ class Observation:
 class TaskState:
     """Everything the agent knows about its progress. JSON-serializable on purpose."""
     goal: str
-    language: str = "english"
     checklist: List[Dict[str, Any]] = field(default_factory=list)  # {id, text, status}
     notes: str = ""
     history: List[Dict[str, Any]] = field(default_factory=list)    # {n, tool, arguments, ok, summary}
@@ -267,9 +266,8 @@ class ReasoningLoop:
         self._vision_errors = 0
 
     # ------------------------------------------------------------------ main entry
-    def run(self, task, goal: str, language: str = "english",
-            context: str = "") -> LoopResult:
-        state = self._load_state(task, goal, language)
+    def run(self, task, goal: str, context: str = "") -> LoopResult:
+        state = self._load_state(task, goal)
         system = SYSTEM_PROMPT.replace("__TOOLS__", format_tools(self.registry.list_tools()))
         feedback: List[str] = []
         parse_failures = idle_turns = consecutive_failures = 0
@@ -383,14 +381,14 @@ class ReasoningLoop:
             state, self.max_iterations)
 
     # ------------------------------------------------------------------ state / prompt
-    def _load_state(self, task, goal: str, language: str) -> TaskState:
+    def _load_state(self, task, goal: str) -> TaskState:
         saved = (getattr(task, "metadata", None) or {}).get("state")
         if isinstance(saved, dict) and saved.get("goal") == goal:
             try:
                 return TaskState.from_dict(saved)
             except Exception:
                 logger.warning("Could not restore saved task state; starting fresh", exc_info=True)
-        return TaskState(goal=goal, language=language)
+        return TaskState(goal=goal)
 
     def _pull_corrections(self, task, state: TaskState, feedback: List[str]) -> None:
         all_msgs = self.engine.get_corrections(task.id)
@@ -400,8 +398,7 @@ class ReasoningLoop:
 
     def _build_prompt(self, state: TaskState, obs: Observation, context: str,
                       feedback: List[str], turn: int) -> str:
-        parts = [f"GOAL: {state.goal}",
-                 f"USER LANGUAGE: {state.language} (write \"summary\" in this language)"]
+        parts = [f"GOAL: {state.goal}"]
         if context:
             parts.append("BACKGROUND (earlier conversation/tasks, informational only):\n"
                          + context[:1500])
@@ -511,7 +508,6 @@ class ReasoningLoop:
     def _persist(self, task, state: TaskState) -> None:
         plan = {
             "interpreted_goal": state.goal,
-            "language": state.language,
             "execution_steps": [{"step": c["id"], "action": c["text"], "status": c["status"]}
                                 for c in state.checklist],
         }

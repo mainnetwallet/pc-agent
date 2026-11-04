@@ -3,11 +3,10 @@
 Implements the execution architecture:
   OBSERVE -> UNDERSTAND -> PLAN -> ACT -> VERIFY -> LEARN
 
-With an LLM configured (LLM_API_KEY) the PLAN/ACT part is an iterative reasoning loop
-(core.loop): the LLM is called repeatedly, each time seeing the results of its previous
-actions, a fresh observation of the PC and its own checklist/notes, until the task is
-finished. Without an LLM the agent falls back to the rule-based planner and runs the
-resulting plan open-loop.
+Everything is LLM-driven. PLAN/ACT is an iterative reasoning loop (core.loop): the LLM
+is called repeatedly, each time seeing the results of its previous actions, a fresh
+observation of the PC and its own checklist/notes, until the task is finished. There is
+no rule-based planner: if no LLM is configured, the task fails with a clear error.
 """
 
 import time
@@ -23,7 +22,6 @@ from screen.capture import capture_engine
 from discovery.registry import registry
 from tasks.engine import task_engine, TaskStatus
 from core.loop import LoopResult, Observation, ReasoningLoop
-from core.planner import planner, detect_language
 from core.executor import executor
 from llm.llm import llm
 from memory.sqlite_store import memory
@@ -43,9 +41,17 @@ class Agent:
         evidence: List[str] = []
 
         try:
-            # ---------- OBSERVE ----------
             # Ensure the task is marked RUNNING (idempotent).
             task_engine.mark_running(task_id)
+
+            # Everything is decided by the LLM; without one there is nothing to run.
+            if not llm.available:
+                msg = ("LLM not configured: set LLM_API_KEY and LLM_PROVIDER "
+                       "(openai | anthropic | custom) in .env, then retry the task.")
+                task_engine.fail(task_id, msg)
+                return msg
+
+            # ---------- OBSERVE ----------
             with task_engine._lock:
                 task = task_engine._tasks[task_id]
                 task.status = TaskStatus.PLANNING
@@ -60,9 +66,7 @@ class Agent:
             memory.add_conversation("user", instruction, {"task_id": task_id})
 
             self._ensure_tools()
-            if llm.available:
-                return self._run_with_loop(task, instruction, context, evidence)
-            return self._run_with_plan(task, instruction, context, evidence)
+            return self._run_with_loop(task, instruction, context, evidence)
 
         except Exception as e:
             tb = traceback.format_exc()
@@ -75,7 +79,7 @@ class Agent:
         finally:
             self._active = False
 
-    # --------------------------------------------------------------- loop mode (LLM)
+    # --------------------------------------------------------------- reasoning loop (LLM)
     def _run_with_loop(self, task, instruction: str, context: str,
                        evidence: List[str]) -> str:
         task_id = task.id
@@ -93,8 +97,7 @@ class Agent:
             t.started_at = time.time()
             t.updated_at = time.time()
 
-        result = loop.run(task, goal=instruction, language=detect_language(instruction),
-                          context=context)
+        result = loop.run(task, goal=instruction, context=context)
         state = result.state
         failed_actions = sum(1 for h in state.history if not h["ok"])
         evidence.append(f"PLAN: goal={instruction} steps={len(state.checklist)}")
@@ -171,50 +174,6 @@ class Agent:
         return {"passed": passed, "evidence": evidence,
                 "summary": f"{'PASS' if passed else 'FAIL'} - {'; '.join(evidence)}"}
 
-    # --------------------------------------------------------------- legacy mode (no LLM)
-    def _run_with_plan(self, task, instruction: str, context: str,
-                       evidence: List[str]) -> str:
-        task_id = task.id
-
-        # ---------- UNDERSTAND + PLAN ----------
-        plan = planner.plan(instruction, context=context)
-        with task_engine._lock:
-            task = task_engine._tasks[task_id]
-            task.plan = plan
-            task.status = TaskStatus.RUNNING
-            task.started_at = time.time()
-            task.updated_at = time.time()
-        memory.save_task(task_id, instruction, "RUNNING", plan=plan)
-        evidence.append(f"PLAN: goal={plan.get('interpreted_goal')} steps={len(plan.get('execution_steps', []))}")
-        self._log_step(task_id, "plan", plan)
-
-        # ---------- ACT ----------
-        result = executor.execute_plan(task, task_engine)
-        evidence.append(f"ACT: {result}")
-        self._log_step(task_id, "act", result)
-
-        if task_engine.stop_requested(task_id):
-            evidence.append("STOPPED: task cancelled by user")
-            return "\n".join(evidence)
-
-        # ---------- VERIFY ----------
-        verification = self._verify(task, plan, result)
-        evidence.append(f"VERIFY: {verification['summary']}")
-        self._log_step(task_id, "verify", verification)
-
-        # ---------- LEARN ----------
-        self._learn(task, plan, verification)
-        evidence.append("LEARN: saved workflow/skill if applicable")
-
-        final = "\n".join(evidence)
-        memory.add_conversation("agent", f"[{'done' if verification['passed'] else 'failed'}] "
-                                         f"{instruction}"[:500], {"task_id": task_id})
-        if verification["passed"]:
-            task_engine.complete(task_id, final)
-        else:
-            task_engine.fail(task_id, final)
-        return final
-
     # --------------------------------------------------------------- OBSERVE
     def _observe(self, task_id: str) -> str:
         parts: List[str] = []
@@ -245,6 +204,12 @@ class Agent:
         skills = memory.list_skills()
         if skills:
             parts.append(f"Known skills: {', '.join(s['name'] for s in skills[:10])}")
+        try:
+            projects = memory.search_projects("")[:5]
+        except Exception:
+            projects = []
+        if projects:
+            parts.append("Recent projects: " + ", ".join(p["name"] for p in projects))
         return "\n".join(parts)
 
     # --------------------------------------------------------------- ACT support
@@ -252,30 +217,6 @@ class Agent:
         from discovery.adapters import register_builtin_adapters
         if not registry.has_tool("desktop.click"):
             register_builtin_adapters()
-
-    # --------------------------------------------------------------- VERIFY
-    def _verify(self, task, plan: Dict, act_result: str) -> Dict[str, Any]:
-        """Verify actual outcomes using screenshots and evidence."""
-        evidence: List[str] = []
-        passed = True
-        criteria = plan.get("success_criteria", []) or ["Action executed without error"]
-
-        # Capture post-execution screenshot
-        path, pil = self.desktop.screenshot()
-        if path:
-            evidence.append(f"post-execution screenshot: {path}")
-
-        # Check that no exception was raised in act_result
-        if "failed" in act_result.lower() or "error" in act_result.lower():
-            passed = False
-            evidence.append("Act step reported failure/error")
-
-        # Simple heuristics per success criteria
-        for c in criteria:
-            evidence.append(f"criterion: {c}")
-
-        return {"passed": passed, "evidence": evidence,
-                "summary": f"{'PASS' if passed else 'FAIL'} - {len(evidence)} evidence items"}
 
     # --------------------------------------------------------------- LEARN
     def _learn(self, task, plan: Dict, verification: Dict) -> None:

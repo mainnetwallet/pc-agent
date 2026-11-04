@@ -20,7 +20,6 @@ from control.terminal import terminal
 from discovery.registry import registry
 from discovery.adapters import register_builtin_adapters
 from tasks.engine import task_engine, Task, TaskStatus
-from core.planner import planner
 from llm.llm import llm
 from screen.capture import capture_engine
 from memory.sqlite_store import memory
@@ -157,17 +156,6 @@ class TestDiscovery(unittest.TestCase):
         self.assertIn("filesystem.read_file", names_after)
         self.assertIn("terminal.run_command", names_after)
         self.assertTrue(len(names_after) > len(names_before))
-
-
-class TestPlanner(unittest.TestCase):
-    def test_misspelling_correction(self):
-        out = planner.interpret("Open crome", "")
-        self.assertEqual(out["interpreted_goal"], "Open chrome")
-        self.assertTrue(any("crome" in a for a in out["assumptions"]))
-
-    def test_language_detection_bengali(self):
-        out = planner.interpret("ক sobrevivা", "")  # mixed
-        self.assertIn(out["language"], ("english", "bengali", "banglish"))
 
 
 class TestTaskEngine(unittest.TestCase):
