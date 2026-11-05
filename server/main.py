@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import time
@@ -188,16 +189,72 @@ def get_task(task_id: str, _auth=Depends(verify_api_key)):
     cols = [d[0] for d in cur.description]
     return dict(zip(cols, row))
 
+# A reply that is only "cancel / stop / task cancel koro / bondho koro" cancels the task instead of
+# being handed to the agent as an answer. Every word must be a cancel word or a filler, so
+# "stop the music" or "cancel koro na" are still treated as normal replies.
+_CANCEL_WORDS = {"cancel", "stop", "abort", "quit", "terminate", "kill", "bondho", "bandho", "batil", "বাতিল", "বন্ধ"}
+_CANCEL_FILLER = {"task", "the", "this", "it", "please", "plz", "pls", "now", "just", "koro", "kor", "kore", "korun",
+                  "den", "dao", "ta", "ei", "oi", "kaj", "job", "chai", "chay"}
+
+
+def is_cancel_command(text: str) -> bool:
+    words = [w for w in re.split(r"[\s.,!?;:\"'()\-]+", (text or "").lower()) if w]
+    return (0 < len(words) <= 6
+            and any(w in _CANCEL_WORDS for w in words)
+            and all(w in _CANCEL_WORDS or w in _CANCEL_FILLER for w in words))
+
+
+def _task_row(task_id: str):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("SELECT * FROM tasks WHERE id=?"), (task_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return dict(zip([d[0] for d in cur.description], row))
+    finally:
+        conn.close()
+
+
+def _cancel_task(task_id: str) -> bool:
+    """Cancel in the server database right away, then tell the agent.
+
+    The agent keeps its tasks in memory only. After it restarted, a task that was waiting for the
+    user is unknown to it, so it can never confirm the cancel. The database is what the dashboard
+    shows, so the cancel must not depend on the agent answering.
+    """
+    row = _task_row(task_id)
+    if row is None:
+        return False
+    if row["status"] not in FINAL_STATES:
+        _update_task(task_id, "CANCELLED")
+        _broadcast({"type": "task.updated", "task_id": task_id, "status": "CANCELLED"})
+    _broadcast({"type": "task.stop", "task_id": task_id})
+    _run_async(_send_agent({"type": "stop", "task_id": task_id}))
+    return True
+
+
 @app.post("/tasks/{task_id}/message")
 def task_message(task_id: str, msg: TaskMessage, _auth=Depends(verify_api_key)):
+    row = _task_row(task_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if row["status"] not in FINAL_STATES and is_cancel_command(msg.message):
+        _cancel_task(task_id)
+        return {"ok": True, "cancelled": True}
     _broadcast({"type": "task.message", "task_id": task_id, "message": msg.message})
-    _run_async(_send_agent({"type": "message", "task_id": task_id, "message": msg.message}))
+    payload = {"type": "message", "task_id": task_id, "message": msg.message}
+    if row["status"] == "NEEDS_USER_ACTION":
+        # If the agent restarted since it asked, it no longer knows this task. Send what it needs
+        # to bring the task back (its saved checklist/notes are restored from its own memory).
+        payload.update(instruction=row["instruction"], question=row.get("result") or "")
+    _run_async(_send_agent(payload))
     return {"ok": True}
 
 @app.post("/tasks/{task_id}/stop")
 def stop_task(task_id: str, _auth=Depends(verify_api_key)):
-    _broadcast({"type": "task.stop", "task_id": task_id})
-    _run_async(_send_agent({"type": "stop", "task_id": task_id}))
+    _cancel_task(task_id)
     return {"ok": True}
 
 @app.post("/tasks/{task_id}/pause")
@@ -369,7 +426,7 @@ def _update_task(task_id: str, status: str, result=None, error=None):
     try:
         cur = conn.cursor()
         cur.execute(_q("UPDATE tasks SET status=?, result=COALESCE(?, result), error=COALESCE(?, error), "
-                       "updated_at=?, completed_at=COALESCE(?, completed_at) WHERE id=?"),
+                       "updated_at=?, completed_at=COALESCE(?, completed_at) WHERE id=? AND status != 'CANCELLED'"),
                     (status, result, error, now, done, task_id))
         conn.commit()
     finally:

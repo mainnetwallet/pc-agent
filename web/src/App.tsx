@@ -251,7 +251,6 @@ const SENT = new Map<string, number>();
 const SENT_TTL = 20000;
 /** What the agent asked: the first paragraph of the task result (the rest is internal evidence). */
 const askedQuestion = (t: Task) => (t.result ?? "").trim().split("\n\n")[0].trim();
-const FINAL = ["COMPLETED", "FAILED", "CANCELLED"];
 
 function NavBadge() {
   const { tasks } = useTasks("NEEDS_USER_ACTION");
@@ -273,7 +272,9 @@ function TaskChat({ t, reload }: { t: Task; reload: () => void }) {
   const timedOut = asking && sentAt !== undefined && !waiting;
   const shown: Turn[] = [{ role: "user", text: t.instruction }, ...turns];
   if (asking && sentAt === undefined && q) shown.push({ role: "agent", text: q });
-  if (FINAL.includes(t.status) && q && shown[shown.length - 1]?.text !== q) shown.push({ role: "agent", text: q });
+  // A finished task shows its result. A cancelled one shows the open question only if the user never replied.
+  const showResult = ["COMPLETED", "FAILED"].includes(t.status) || (t.status === "CANCELLED" && turns.length === 0);
+  if (showResult && q && shown[shown.length - 1]?.text !== q) shown.push({ role: "agent", text: q });
 
   useEffect(() => { end.current?.scrollIntoView({ block: "nearest" }); }, [shown.length, waiting]);
 
@@ -285,11 +286,13 @@ function TaskChat({ t, reload }: { t: Task; reload: () => void }) {
     try {
       const res = await api.taskMessage(t.id, message);
       if (!res.ok) throw new Error(`The server refused the reply (HTTP ${res.status}).`);
+      const cancelled = !!(await res.json().catch(() => ({})))?.cancelled;
       const next: Turn[] = [...turns];
       if (asking && q && next[next.length - 1]?.text !== q) next.push({ role: "agent", text: q });
       next.push({ role: "user", text: message });
+      if (cancelled) next.push({ role: "agent", text: "Task cancelled." });
       setTurns(next); saveThread(t.id, next);
-      if (asking) SENT.set(t.id, Date.now());
+      if (asking && !cancelled) SENT.set(t.id, Date.now());
       setText(""); reload();
     } catch (x: any) {
       setErr(x.message === "Failed to fetch" ? "Can't reach the server on port 8000. Start it with “pc”, then try again." : x.message || "Couldn't send the reply.");

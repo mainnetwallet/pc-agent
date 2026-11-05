@@ -288,6 +288,28 @@ class TaskEngine:
             memory.save_task(task_id, instruction, "QUEUED")
             memory.audit(task_id, "task.resumed_by_user_reply", {})
 
+    def restore_waiting(self, task_id: str, instruction: str, question: str, message: str) -> bool:
+        """Bring back a task that asked the user a question before this agent restarted.
+
+        The engine only keeps tasks in memory, so after a restart the task is unknown here while
+        the server still shows it as NEEDS_USER_ACTION. The server sends the instruction and the
+        question along with the reply; the task is re-created with the answer as its first
+        correction and queued. The reasoning loop restores its checklist/notes from the saved
+        checkpoint (SQLite), so it continues instead of starting over.
+        """
+        message = (message or "").strip()
+        instruction = (instruction or "").strip()
+        if not task_id or not message or not instruction:
+            return False
+        with self._lock:
+            if task_id in self._tasks:
+                return False
+        q = self.question_of(question)
+        text = f'Answer to your question "{q[:300]}": {message}' if q else message
+        self.create_task(instruction, task_id=task_id, metadata={"source": "relay", "corrections": [text]})
+        memory.audit(task_id, "task.restored_by_user_reply", {"message": message})
+        return True
+
     # --------------------------------------------------------------- run-time control helpers
     def stop_requested(self, task_id: str) -> bool:
         """True once the task was stopped. stop() pops the stop event during cleanup,

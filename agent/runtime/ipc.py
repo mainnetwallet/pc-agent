@@ -117,7 +117,18 @@ class RelayClient:
         elif mtype == "resume":
             task_engine.resume(tid)
         elif mtype == "message":
-            task_engine.inject_message(tid, data.get("message", ""))
+            self._handle_reply(tid, data)
+
+    def _handle_reply(self, tid: str, data: dict):
+        message = data.get("message", "")
+        if task_engine.get_task(tid) is None and data.get("instruction"):
+            # The agent restarted after the task asked its question. Rebuild the task from what
+            # the server sent, with the answer, instead of dropping the reply.
+            if task_engine.restore_waiting(tid, data["instruction"], data.get("question") or "", message):
+                self._tracked[tid] = None
+                logger.info("Restored task %s from the user's reply", tid[:8])
+            return
+        task_engine.inject_message(tid, message)
 
     def _accept_task(self, data: dict):
         tid = data.get("task_id")
