@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, setToken } from "./api";
 
-type Task = { id: string; instruction: string; status: string };
+type Task = { id: string; instruction: string; status: string; result?: string | null };
 type Status = { online?: boolean; streaming?: boolean };
 
 const LABEL: Record<string, string> = {
   QUEUED: "Queued", RUNNING: "Running", WAITING: "Waiting",
   RECOVERING: "Recovering", COMPLETED: "Completed", FAILED: "Failed",
+  NEEDS_USER_ACTION: "Needs your reply", CANCELLED: "Stopped", PLANNING: "Planning", DISPATCHED: "Sent to PC",
 };
 const NAV = [
   ["console", "Console"], ["chat", "Chat"], ["tasks", "Tasks"], ["apps", "Apps"],
@@ -37,7 +38,7 @@ function Actions({ t, done }: { t: Task; done: () => void }) {
     <span className="acts">
       {t.status === "RUNNING" && <button onClick={() => run(api.pauseTask)}>Pause</button>}
       {t.status === "WAITING" && <button onClick={() => run(api.resumeTask)}>Resume</button>}
-      {["QUEUED", "RUNNING", "WAITING"].includes(t.status) && <button className="danger" onClick={() => run(api.stopTask)}>Stop</button>}
+      {["QUEUED", "RUNNING", "WAITING", "NEEDS_USER_ACTION"].includes(t.status) && <button className="danger" onClick={() => run(api.stopTask)}>Stop</button>}
     </span>
   );
 }
@@ -118,7 +119,7 @@ function Monitor({ online }: { online: boolean }) {
   );
 }
 
-function Console({ online }: { online: boolean }) {
+function Console({ online, openTasks }: { online: boolean; openTasks: () => void }) {
   const { tasks, reload } = useTasks();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -158,7 +159,7 @@ function Console({ online }: { online: boolean }) {
           <ul>{tasks.slice(0, 8).map(t => (
             <li key={t.id}>
               <p className="ins">{t.instruction}</p>
-              <div className="meta"><Chip s={t.status} /><Actions t={t} done={reload} /></div>
+              <div className="meta"><Chip s={t.status} />{t.status === "NEEDS_USER_ACTION" && <button className="primary" onClick={openTasks}>Reply</button>}<Actions t={t} done={reload} /></div>
             </li>
           ))}</ul>
         )}
@@ -218,21 +219,102 @@ function Chat({ openTasks }: { openTasks: () => void }) {
   );
 }
 
+const THREAD_KEY = (id: string) => `pc_agent_thread_${id}`;
+type Turn = { role: "agent" | "user"; text: string };
+const loadThread = (id: string): Turn[] => {
+  try { const v = JSON.parse(localStorage.getItem(THREAD_KEY(id)) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
+};
+const saveThread = (id: string, turns: Turn[]) => {
+  try { localStorage.setItem(THREAD_KEY(id), JSON.stringify(turns.slice(-40))); } catch { /* storage blocked */ }
+};
+/** Task ids whose reply was just sent -> when. Until the status moves on we show "sent" instead of the old question. */
+const SENT = new Map<string, number>();
+const SENT_TTL = 20000;
+/** What the agent asked: the first paragraph of the task result (the rest is internal evidence). */
+const askedQuestion = (t: Task) => (t.result ?? "").trim().split("\n\n")[0].trim();
+const FINAL = ["COMPLETED", "FAILED", "CANCELLED"];
+
+function NavBadge() {
+  const { tasks } = useTasks("NEEDS_USER_ACTION");
+  return tasks.length ? <span className="badge" aria-label={`${tasks.length} tasks need your reply`}>{tasks.length}</span> : null;
+}
+
+function TaskChat({ t, reload }: { t: Task; reload: () => void }) {
+  const [turns, setTurns] = useState<Turn[]>(() => loadThread(t.id));
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const asking = t.status === "NEEDS_USER_ACTION";
+  const q = askedQuestion(t);
+  // The status moved on, so the agent got the reply: forget the "sent" marker.
+  useEffect(() => { if (!asking) SENT.delete(t.id); }, [asking, t.id]);
+  const sentAt = SENT.get(t.id);
+  const waiting = asking && sentAt !== undefined && Date.now() - sentAt < SENT_TTL;
+  const timedOut = asking && sentAt !== undefined && !waiting;
+  const shown: Turn[] = [...turns];
+  if (asking && sentAt === undefined && q) shown.push({ role: "agent", text: q });
+  if (FINAL.includes(t.status) && q && shown[shown.length - 1]?.text !== q) shown.push({ role: "agent", text: q });
+
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    const message = text.trim();
+    if (!message || busy) return;
+    setBusy(true); setErr("");
+    try {
+      const res = await api.taskMessage(t.id, message);
+      if (!res.ok) throw new Error(`The server refused the reply (HTTP ${res.status}).`);
+      const next: Turn[] = [...turns];
+      if (asking && q && next[next.length - 1]?.text !== q) next.push({ role: "agent", text: q });
+      next.push({ role: "user", text: message });
+      setTurns(next); saveThread(t.id, next);
+      if (asking) SENT.set(t.id, Date.now());
+      setText(""); reload();
+    } catch (x: any) {
+      setErr(x.message === "Failed to fetch" ? "Can't reach the server on port 8000. Start it with “pc”, then try again." : x.message || "Couldn't send the reply.");
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="tchat">
+      <div className="tlog" aria-live="polite">
+        {shown.map((m, i) => (
+          <div key={i} className={`msg ${m.role}`}><p>{m.text}</p></div>
+        ))}
+      </div>
+      {waiting && <p className="hint">Reply sent. The agent is continuing the task…</p>}
+      {timedOut && <p className="err" role="alert">The PC hasn't picked up the reply yet. Check that the agent is running, then send it again.</p>}
+      {asking && !waiting && (
+        <form className="compose" onSubmit={send}>
+          <input value={text} onChange={e => setText(e.target.value)} placeholder="Type your answer for the agent" aria-label="Your answer to the agent" autoComplete="off" />
+          <button className="primary" disabled={busy || !text.trim()}>{busy ? "Sending" : "Send reply"}</button>
+        </form>
+      )}
+      {err && <p className="err" role="alert">{err}</p>}
+    </div>
+  );
+}
+
 function Tasks() {
   const [filter, setFilter] = useState("all");
   const { tasks, reload } = useTasks(filter === "all" ? undefined : filter);
+  // Tasks that wait for the user come first so they are never buried.
+  const ordered = [...tasks].sort((a, b) => Number(b.status === "NEEDS_USER_ACTION") - Number(a.status === "NEEDS_USER_ACTION"));
   return (
     <div>
       <div className="tabs">
-        {["all", "QUEUED", "RUNNING", "COMPLETED", "FAILED"].map(k => (
-          <button key={k} className={filter === k ? "on" : ""} aria-pressed={filter === k} onClick={() => setFilter(k)}>{k === "all" ? "All" : LABEL[k]}</button>
+        {["all", "NEEDS_USER_ACTION", "QUEUED", "RUNNING", "COMPLETED", "FAILED"].map(k => (
+          <button key={k} className={filter === k ? "on" : ""} aria-pressed={filter === k} onClick={() => setFilter(k)}>{k === "all" ? "All" : k === "NEEDS_USER_ACTION" ? "Needs reply" : LABEL[k]}</button>
         ))}
       </div>
-      {tasks.length === 0 ? <p className="empty">{filter === "all" ? "No tasks yet. Send one from the Console." : "No tasks have this status."}</p> : (
-        <ul className="rows">{tasks.map(t => (
-          <li key={t.id}>
+      {ordered.length === 0 ? <p className="empty">{filter === "all" ? "No tasks yet. Send one from the Console." : "No tasks have this status."}</p> : (
+        <ul className="rows">{ordered.map(t => (
+          <li key={t.id} className={t.status === "NEEDS_USER_ACTION" ? "ask" : ""}>
             <div><p className="ins">{t.instruction}</p><small>{t.id.slice(0, 8)}</small></div>
             <Chip s={t.status} /><Actions t={t} done={reload} />
+            {t.status === "NEEDS_USER_ACTION" && <TaskChat t={t} reload={reload} />}
+            {t.status !== "NEEDS_USER_ACTION" && loadThread(t.id).length > 0 && (
+              <details className="tchat-old"><summary>Conversation</summary><TaskChat t={t} reload={reload} /></details>
+            )}
           </li>
         ))}</ul>
       )}
@@ -278,14 +360,14 @@ export default function App() {
         <div className="brand"><span className={`dot ${status?.online ? "on" : ""}`} /><b>PC Agent</b></div>
         <nav>
           {NAV.map(([k, label]) => (
-            <button key={k} className={view === k ? "on" : ""} aria-current={view === k ? "page" : undefined} onClick={() => setView(k)}>{label}</button>
+            <button key={k} className={view === k ? "on" : ""} aria-current={view === k ? "page" : undefined} onClick={() => setView(k)}>{label}{k === "tasks" && <NavBadge />}</button>
           ))}
         </nav>
         <p className="state">{status ? (status.online ? "PC online" : "PC offline") : "Server unreachable"}</p>
       </header>
       <main>
         <h1>{NAV.find(n => n[0] === view)?.[1]}</h1>
-        {view === "console" && <Console online={!!status?.online} />}
+        {view === "console" && <Console online={!!status?.online} openTasks={() => setView("tasks")} />}
         {view === "chat" && <Chat openTasks={() => setView("tasks")} />}
         {view === "tasks" && <Tasks />}
         {view === "apps" && <Note title="Installed apps">Nothing to list yet. The agent discovers apps on the PC but doesn't report them to this dashboard. To use one, name it in a task, for example “Open Chrome and search for today's weather.”</Note>}

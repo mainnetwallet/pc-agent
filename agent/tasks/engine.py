@@ -245,15 +245,48 @@ class TaskEngine:
         memory.save_task(task_id, task.instruction, "RUNNING")
         return True
 
+    @staticmethod
+    def question_of(result: Optional[str]) -> str:
+        """The question the agent asked: the first paragraph of a needs_user result
+        (the rest of that result is internal evidence lines)."""
+        return (result or "").strip().split("\n\n")[0].strip()
+
     def inject_message(self, task_id: str, message: str) -> None:
+        """Give a running task a correction, or ANSWER a task that is waiting for the user.
+
+        A task in NEEDS_USER_ACTION has already finished its run. The reply is stored as a
+        high-priority correction (together with the question it answers, so the LLM knows
+        what "yes" or "profile 3" refers to) and the task is put back in the queue. The
+        reasoning loop then restores its saved checklist/notes and carries on.
+        """
+        message = (message or "").strip()
+        if not message:
+            return
         memory.audit(task_id, "task.message", {"message": message})
+        requeued = False
         with self._lock:
             task = self._tasks.get(task_id)
-            if task:
-                msgs = task.metadata.get("corrections", [])
-                msgs.append(message)
-                task.metadata["corrections"] = msgs
-                task.updated_at = time.time()
+            if not task:
+                return
+            text = message
+            if task.status == TaskStatus.NEEDS_USER_ACTION:
+                question = self.question_of(task.result)
+                if question:
+                    text = f'Answer to your question "{question[:300]}": {message}'
+                task.status = TaskStatus.QUEUED
+                task.result = None
+                task.error = None
+                task.completed_at = None
+                heapq.heappush(self._queue, (-task.priority, task.created_at, task_id))
+                requeued = True
+            msgs = task.metadata.get("corrections", [])
+            msgs.append(text)
+            task.metadata["corrections"] = msgs
+            task.updated_at = time.time()
+            instruction = task.instruction
+        if requeued:
+            memory.save_task(task_id, instruction, "QUEUED")
+            memory.audit(task_id, "task.resumed_by_user_reply", {})
 
     # --------------------------------------------------------------- run-time control helpers
     def stop_requested(self, task_id: str) -> bool:
