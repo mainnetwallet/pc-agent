@@ -146,6 +146,15 @@ def main():
     memory.audit(None, "agent.startup", {"agent": AGENT_NAME, "id": AGENT_ID,
                                          "mode": "standalone+relay" if RELAY_URL else "standalone"})
 
+    # Tasks that were running when the agent last stopped come back PAUSED; nothing resumes
+    # on its own. The user resumes them from the dashboard / Telegram.
+    try:
+        paused = task_engine.restore_interrupted()
+        if paused:
+            logger.info("Restart: %d interrupted task(s) restored as paused (resume to continue)", len(paused))
+    except Exception as e:
+        logger.exception("Failed to restore interrupted tasks: %s", e)
+
     run_watchdog()
 
     # Relay (dashboard/server) and local Telegram + task worker run together.

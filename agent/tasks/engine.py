@@ -12,10 +12,12 @@ execution and calls complete/fail on the engine.
 """
 
 import heapq
+import json
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -237,13 +239,59 @@ class TaskEngine:
             task = self._tasks.get(task_id)
             if task is None or task.status != TaskStatus.WAITING:
                 return False
-            task.status = TaskStatus.RUNNING
+            if task_id in self._paused:
+                # Paused while its run thread is alive: just let that thread carry on.
+                task.status = TaskStatus.RUNNING
+            else:
+                # Brought back paused after a restart (restore_interrupted): no run thread
+                # exists any more. Queue it so the worker starts it; the reasoning loop then
+                # restores its checklist/notes from the saved checkpoint and continues.
+                task.status = TaskStatus.QUEUED
+                heapq.heappush(self._queue, (-task.priority, task.created_at, task_id))
             task.updated_at = time.time()
+            new_status = task.status.value
         ev = self._paused.get(task_id)
         if ev:
             ev.set()
-        memory.save_task(task_id, task.instruction, "RUNNING")
+        memory.save_task(task_id, task.instruction, new_status)
         return True
+
+    # Statuses that mean "the agent was working on it". After a restart nothing is.
+    INTERRUPTED_STATUSES = ("RUNNING", "PLANNING", "RECOVERING", "WAITING")
+
+    def restore_interrupted(self) -> List[str]:
+        """Bring back, PAUSED, every task that was in flight when the agent stopped.
+
+        The engine keeps tasks in memory only, so after a restart those tasks would be
+        forgotten here while SQLite (and the server) still show them as RUNNING. They are
+        not started again on their own: each one comes back as WAITING (paused) and runs
+        only when the user resumes it. Returns the ids that were restored.
+        """
+        restored: List[str] = []
+        for status in self.INTERRUPTED_STATUSES:
+            for row in memory.list_tasks(status=status, limit=1000):
+                tid = row["id"]
+                plan = None
+                if row.get("plan"):
+                    try:
+                        plan = json.loads(row["plan"])
+                    except (TypeError, ValueError):
+                        plan = None
+                try:
+                    created = datetime.fromisoformat(row["created_at"]).timestamp()
+                except (KeyError, TypeError, ValueError):
+                    created = time.time()
+                with self._lock:
+                    if tid in self._tasks:
+                        continue
+                    self._tasks[tid] = Task(
+                        id=tid, instruction=row["instruction"], status=TaskStatus.WAITING,
+                        plan=plan, created_at=created, metadata={"restored": True},
+                    )
+                memory.save_task(tid, row["instruction"], "WAITING", plan=plan)
+                memory.audit(tid, "task.paused_on_restart", {"was": status})
+                restored.append(tid)
+        return restored
 
     @staticmethod
     def question_of(result: Optional[str]) -> str:
