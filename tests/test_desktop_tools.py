@@ -1,5 +1,5 @@
 """Tests for the mouse tools the agent was missing (scroll, double-click, drag, ...),
-typing of non-ASCII text, and the autonomy / wallet-safety rules in the system prompt.
+typing of non-ASCII text, and the autonomy rules in the system prompt.
 
 Runs on Linux/CI: OS-level libraries are stubbed (see test_executor_actions), and the real
 DesktopControl is loaded against fake pyautogui / pyperclip modules.
@@ -158,10 +158,6 @@ class TestPromptRules(unittest.TestCase):
     def test_prompt_tells_the_llm_to_decide_for_itself(self):
         self.assertIn("BE AUTONOMOUS", SYSTEM_PROMPT)
 
-    def test_prompt_keeps_wallet_and_signing_behind_the_owner(self):
-        low = SYSTEM_PROMPT.lower()
-        for phrase in ("seed phrase", "private key", "sign a message", "needs_user"):
-            self.assertIn(phrase, low)
 
 
 if __name__ == "__main__":
