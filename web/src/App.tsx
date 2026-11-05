@@ -8,7 +8,7 @@ type Status = { online?: boolean; streaming?: boolean };
 const LABEL: Record<string, string> = {
   QUEUED: "Queued", RUNNING: "Running", WAITING: "Waiting",
   RECOVERING: "Recovering", COMPLETED: "Completed", FAILED: "Failed",
-  NEEDS_USER_ACTION: "Needs your reply", CANCELLED: "Stopped", PLANNING: "Planning", DISPATCHED: "Sent to PC",
+  NEEDS_USER_ACTION: "Needs your reply", CANCELLED: "Cancelled", PLANNING: "Planning", DISPATCHED: "Sent to PC",
 };
 const NAV = [
   ["console", "Console"], ["chat", "Chat"], ["action", "Action"], ["tasks", "Tasks"], ["apps", "Apps"],
@@ -48,16 +48,35 @@ function useTasks(filter?: string) {
   return { tasks, reload, loaded };
 }
 
-function Actions({ t, done }: { t: Task; done: () => void }) {
-  const run = async (fn: (id: string) => Promise<Response>) => {
-    try { await fn(t.id); } catch { /* the refreshed list shows the real state */ }
+const ACTIVE = ["QUEUED", "PLANNING", "DISPATCHED", "RUNNING", "WAITING", "RECOVERING", "NEEDS_USER_ACTION"];
+
+/** Pause / resume / cancel a task. With `onDelete` it also offers Delete (after a confirmation). */
+function Actions({ t, done, chat, onDelete }: { t: Task; done: () => void; chat?: () => void; onDelete?: () => void }) {
+  const [err, setErr] = useState("");
+  const run = async (fn: (id: string) => Promise<Response>, after?: () => void) => {
+    setErr("");
+    try {
+      const res = await fn(t.id);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      after?.();
+    } catch (x: any) { setErr(x.message === "Failed to fetch" ? "Server unreachable" : x.message || "Failed"); }
     done();
+  };
+  const remove = () => {
+    const msg = ACTIVE.includes(t.status) ? "Cancel and delete this task? It cannot be undone." : "Delete this task? It cannot be undone.";
+    if (!window.confirm(msg)) return;
+    run(api.deleteTask, () => { try { localStorage.removeItem(THREAD_KEY(t.id)); } catch { /* storage blocked */ } onDelete?.(); });
   };
   return (
     <span className="acts">
+      {err && <span className="err" role="alert">{err}</span>}
+      {chat && (t.status === "NEEDS_USER_ACTION" || loadThread(t.id).length > 0) && (
+        <button className={t.status === "NEEDS_USER_ACTION" ? "primary" : ""} onClick={chat}>{t.status === "NEEDS_USER_ACTION" ? "Reply" : "Open chat"}</button>
+      )}
       {t.status === "RUNNING" && <button onClick={() => run(api.pauseTask)}>Pause</button>}
       {t.status === "WAITING" && <button onClick={() => run(api.resumeTask)}>Resume</button>}
-      {["QUEUED", "RUNNING", "WAITING", "NEEDS_USER_ACTION"].includes(t.status) && <button className="danger" onClick={() => run(api.stopTask)}>Stop</button>}
+      {ACTIVE.includes(t.status) && <button className="danger" onClick={() => run(api.stopTask)}>Cancel</button>}
+      {onDelete && <button className="danger" onClick={remove}>Delete</button>}
     </span>
   );
 }
@@ -358,7 +377,7 @@ function ActionPage({ selected }: { selected: string }) {
                 <Chip s={current.status} />
                 <span className="cid">Chat ID <code>{current.id}</code></span>
                 <button onClick={copy}>{copied ? "Copied" : "Copy link"}</button>
-                <Actions t={current} done={reload} />
+                <Actions t={current} done={reload} onDelete={() => go("action")} />
               </div>
             </div>
             <TaskChat key={current.id} t={current} reload={reload} />
@@ -377,7 +396,7 @@ function Tasks({ openChat }: { openChat: (id: string) => void }) {
   return (
     <div>
       <div className="tabs">
-        {["all", "NEEDS_USER_ACTION", "QUEUED", "RUNNING", "COMPLETED", "FAILED"].map(k => (
+        {["all", "NEEDS_USER_ACTION", "QUEUED", "RUNNING", "COMPLETED", "FAILED", "CANCELLED"].map(k => (
           <button key={k} className={filter === k ? "on" : ""} aria-pressed={filter === k} onClick={() => setFilter(k)}>{k === "all" ? "All" : k === "NEEDS_USER_ACTION" ? "Needs reply" : LABEL[k]}</button>
         ))}
       </div>
@@ -385,10 +404,7 @@ function Tasks({ openChat }: { openChat: (id: string) => void }) {
         <ul className="rows">{ordered.map(t => (
           <li key={t.id} className={t.status === "NEEDS_USER_ACTION" ? "ask" : ""}>
             <div><p className="ins">{t.instruction}</p><small>{t.id.slice(0, 8)}</small></div>
-            <Chip s={t.status} /><Actions t={t} done={reload} />
-            {(t.status === "NEEDS_USER_ACTION" || loadThread(t.id).length > 0) && (
-              <button className={t.status === "NEEDS_USER_ACTION" ? "primary" : ""} onClick={() => openChat(t.id)}>{t.status === "NEEDS_USER_ACTION" ? "Reply" : "Open chat"}</button>
-            )}
+            <Chip s={t.status} /><Actions t={t} done={reload} chat={() => openChat(t.id)} onDelete={() => {}} />
           </li>
         ))}</ul>
       )}

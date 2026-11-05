@@ -22,6 +22,7 @@ export const api = {
   getTask: (id: string) => request(`/tasks/${id}`),
   createTask: (instruction: string) => request("/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction }) }),
   stopTask: (id: string) => request(`/tasks/${id}/stop`, { method: "POST" }),
+  deleteTask: (id: string) => request(`/tasks/${id}`, { method: "DELETE" }),
   pauseTask: (id: string) => request(`/tasks/${id}/pause`, { method: "POST" }),
   resumeTask: (id: string) => request(`/tasks/${id}/resume`, { method: "POST" }),
   taskMessage: (id: string, message: string) => request(`/tasks/${id}/message`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) }),

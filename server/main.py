@@ -257,6 +257,23 @@ def stop_task(task_id: str, _auth=Depends(verify_api_key)):
     _cancel_task(task_id)
     return {"ok": True}
 
+@app.delete("/tasks/{task_id}")
+def delete_task(task_id: str, _auth=Depends(verify_api_key)):
+    """Remove a task from the list. A task that is still active is cancelled first so the agent stops it."""
+    if _task_row(task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _cancel_task(task_id)
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("DELETE FROM events WHERE task_id=?"), (task_id,))
+        cur.execute(_q("DELETE FROM tasks WHERE id=?"), (task_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    _broadcast({"type": "task.deleted", "task_id": task_id})
+    return {"ok": True}
+
 @app.post("/tasks/{task_id}/pause")
 def pause_task(task_id: str, _auth=Depends(verify_api_key)):
     _broadcast({"type": "task.pause", "task_id": task_id})

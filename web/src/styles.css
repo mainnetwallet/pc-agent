@@ -142,3 +142,5 @@ main{padding:28px clamp(16px,3vw,40px);max-width:1280px}
   .inbox.open .back{display:inline-block}
   .room{height:calc(100dvh - 190px)}
 }
+.acts{flex-wrap:wrap;justify-content:flex-end;align-items:center}
+.acts .err{margin:0;font-size:12px}

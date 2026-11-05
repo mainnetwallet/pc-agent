@@ -108,6 +108,23 @@ class TestServerCancel(unittest.TestCase):
         server._update_task(self.tid, "RUNNING")
         self.assertEqual(self.status(), "CANCELLED")
 
+    def test_delete_removes_the_task_and_stops_it_on_the_agent(self):
+        r = self.client.delete(f"/tasks/{self.tid}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.client.get(f"/tasks/{self.tid}").status_code, 404)
+        ids = [t["id"] for t in self.client.get("/tasks").json()["tasks"]]
+        self.assertNotIn(self.tid, ids)
+        self.assertTrue(any(m["type"] == "stop" and m["task_id"] == self.tid for m in self.sent))
+
+    def test_delete_a_finished_task(self):
+        done = f"done-{time.time_ns()}"
+        insert_task(done, status="COMPLETED", result="ok")
+        self.assertEqual(self.client.delete(f"/tasks/{done}").status_code, 200)
+        self.assertEqual(self.client.get(f"/tasks/{done}").status_code, 404)
+
+    def test_delete_unknown_task_is_404(self):
+        self.assertEqual(self.client.delete("/tasks/nope").status_code, 404)
+
     def test_unknown_task_message_is_404(self):
         self.assertEqual(self.client.post("/tasks/nope/message", json={"message": "x"}).status_code, 404)
 
