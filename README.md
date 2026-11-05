@@ -226,8 +226,10 @@ stored in the state, and the LLM is called again until it finishes. So "open an 
 and do X in it" becomes several calls, each one seeing what the previous one did.
 
 The state is saved on every turn (`task.metadata["state"]`, `checkpoints` table, and the
-checklist as `task.plan` for the dashboard). Guards: `AGENT_MAX_ITERATIONS`, stop/pause
-between turns and between actions, abort after 5 identical or 5 failing actions in a row,
+checklist as `task.plan` for the dashboard). There is no limit on LLM calls by default: the
+loop runs until the LLM reports done / failed / needs_user (`AGENT_MAX_ITERATIONS=0`; set a
+number to cap it). Guards: stop/pause between turns and between actions, abort after 5
+failing actions in a row or 5 identical actions on a screen that did not change,
 and a `done` is pushed back once if checklist items are still pending. Task summaries are
 saved to conversation memory so the next task knows what was done before.
 

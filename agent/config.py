@@ -83,7 +83,7 @@ RETRY_BASE_BACKOFF = _env_int("RETRY_BASE_BACKOFF", 2)  # seconds
 # ---------------------------------------------------------------------------
 # Reasoning loop (multi-call LLM agent)
 # ---------------------------------------------------------------------------
-AGENT_MAX_ITERATIONS = _env_int("AGENT_MAX_ITERATIONS", 25)  # LLM turns per task
+AGENT_MAX_ITERATIONS = _env_int("AGENT_MAX_ITERATIONS", 0)  # LLM turns per task; 0 = unlimited
 AGENT_MAX_ACTIONS_PER_TURN = _env_int("AGENT_MAX_ACTIONS_PER_TURN", 3)
 AGENT_HISTORY_WINDOW = _env_int("AGENT_HISTORY_WINDOW", 8)  # recent actions shown in detail
 AGENT_OBSERVE_OCR = _env_bool("AGENT_OBSERVE_OCR", True)  # add OCR text to each observation

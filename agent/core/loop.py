@@ -25,6 +25,8 @@ All collaborators (llm, executor, engine, registry, observe) are injected so the
 loop can be tested without a desktop.
 """
 
+import hashlib
+import itertools
 import json
 import logging
 import time
@@ -117,6 +119,11 @@ def _stringify(obj: Any) -> str:
         return json.dumps(obj, ensure_ascii=False, default=str)
     except Exception:
         return str(obj)
+
+
+def _obs_key(text: str) -> str:
+    """Short fingerprint of an observation, to tell whether the screen changed."""
+    return hashlib.md5((text or "").encode("utf-8", "replace")).hexdigest()[:8]
 
 
 def _signature(rec: Dict[str, Any]) -> str:
@@ -250,7 +257,7 @@ class LoopResult:
 class ReasoningLoop:
     def __init__(self, llm, executor, engine, registry,
                  observe: Callable[[], Observation],
-                 max_iterations: int = 25, max_actions_per_turn: int = 3,
+                 max_iterations: int = 0, max_actions_per_turn: int = 3,
                  history_window: int = 8, use_vision: bool = False,
                  sleep: Callable[[float], None] = time.sleep):
         self.llm = llm
@@ -258,7 +265,8 @@ class ReasoningLoop:
         self.engine = engine
         self.registry = registry
         self.observe = observe
-        self.max_iterations = max_iterations
+        # 0 (or None) = no limit: keep calling the LLM until the task is finished.
+        self.max_iterations = max(int(max_iterations or 0), 0)
         self.max_actions = max_actions_per_turn
         self.history_window = history_window
         self.use_vision = use_vision
@@ -273,7 +281,9 @@ class ReasoningLoop:
         parse_failures = idle_turns = consecutive_failures = 0
         pushed_back = False
 
-        for turn in range(1, self.max_iterations + 1):
+        turns = (range(1, self.max_iterations + 1) if self.max_iterations
+                 else itertools.count(1))
+        for turn in turns:
             if self.engine.wait_if_paused(task.id):
                 return self._finish("stopped", "Stopped by user.", state, turn - 1)
 
@@ -281,6 +291,7 @@ class ReasoningLoop:
             state.iteration = turn
             obs = self._safe_observe()
             state.last_observation = obs.text
+            obs_key = _obs_key(obs.text)
             messages = [
                 {"role": "system", "content": system},
                 {"role": "user", "content": self._build_prompt(state, obs, context,
@@ -332,6 +343,7 @@ class ReasoningLoop:
                         self._persist(task, state)
                         return self._finish("stopped", "Stopped by user.", state, turn)
                     rec = self._run_action(task, state, act)
+                    rec["obs"] = obs_key
                     if rec["ok"]:
                         consecutive_failures = 0
                     else:
@@ -358,7 +370,8 @@ class ReasoningLoop:
             self._persist(task, state)
             if status == "done":
                 pending = state.pending()
-                if pending and not pushed_back and turn < self.max_iterations:
+                if (pending and not pushed_back
+                        and (not self.max_iterations or turn < self.max_iterations)):
                     pushed_back = True
                     items = "; ".join(f"{c['id']}. {c['text']}" for c in pending)
                     feedback.append(f"You said done, but these checklist items are still pending: "
@@ -413,7 +426,8 @@ class ReasoningLoop:
                      + (obs.text or "(unavailable)"))
         if feedback:
             parts.append("SYSTEM FEEDBACK:\n" + "\n".join(f"- {f}" for f in feedback))
-        parts.append(f"Turn {turn} of {self.max_iterations}. Reply with ONLY the JSON object.")
+        label = f"Turn {turn} of {self.max_iterations}" if self.max_iterations else f"Turn {turn}"
+        parts.append(f"{label}. Reply with ONLY the JSON object.")
         return "\n\n".join(parts)
 
     def _apply_reply(self, state: TaskState, data: Dict[str, Any]) -> None:
@@ -437,10 +451,14 @@ class ReasoningLoop:
     def _repeat_count(state: TaskState) -> int:
         if not state.history:
             return 0
-        last = _signature(state.history[-1])
+        last = state.history[-1]
+        last_sig, last_obs = _signature(last), last.get("obs")
         count = 0
         for rec in reversed(state.history):
-            if _signature(rec) != last:
+            # Same action on a screen that changed in between is progress (scrolling,
+            # clicking "Next", pressing Down), not a loop. Records without an "obs"
+            # stamp (older saved states) fall back to comparing the action only.
+            if _signature(rec) != last_sig or rec.get("obs") != last_obs:
                 break
             count += 1
         return count

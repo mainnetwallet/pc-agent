@@ -298,6 +298,42 @@ class TestFeedbackAndGuards(unittest.TestCase):
         self.assertEqual(res.outcome, "max_iterations")
         self.assertIn("1. [ ] a", res.summary)
 
+    def test_no_limit_on_llm_calls_by_default(self):
+        # A long task: 60 working turns, then done. Nothing may cut it off.
+        replies = [{"plan": ["long job"], "actions": [
+            {"tool": "desktop.type_text", "arguments": {"text": f"t{i}"}}],
+            "status": "continue"} for i in range(60)]
+        replies.append({"plan_update": [{"id": 1, "status": "done"}], "status": "done",
+                        "summary": "finished"})
+        llm = FakeLLM(replies)
+        loop, _, _ = make_loop(llm)
+        res = loop.run(make_task(), goal="g")
+        self.assertEqual(res.outcome, "done")
+        self.assertEqual(llm.calls, 61)
+        self.assertEqual(res.iterations, 61)
+        self.assertIn("Turn 61.", llm.prompts[-1])      # no "of N" when unlimited
+        self.assertNotIn(" of ", llm.prompts[-1].split("Turn 61")[1][:8])
+
+    def test_zero_or_none_means_unlimited_and_a_number_still_caps(self):
+        self.assertEqual(make_loop(FakeLLM([]), max_iterations=0)[0].max_iterations, 0)
+        self.assertEqual(make_loop(FakeLLM([]), max_iterations=None)[0].max_iterations, 0)
+        loop = make_loop(FakeLLM([]), max_iterations=7)[0]
+        self.assertEqual(loop.max_iterations, 7)
+
+    def test_same_action_on_a_changing_screen_is_progress_not_stuck(self):
+        # e.g. clicking "Next" or scrolling 8 times: same arguments, screen changes each time.
+        shots = iter(range(1000))
+        replies = [{"plan": ["page through"], "actions": [
+            {"tool": "desktop.press", "arguments": {"key": "pagedown"}}],
+            "status": "continue"} for _ in range(8)]
+        replies.append({"status": "done", "summary": "reached the end",
+                        "plan_update": [{"id": 1, "status": "done"}]})
+        loop, _, executor = make_loop(
+            FakeLLM(replies), observe=lambda: Observation(f"page {next(shots)}"))
+        res = loop.run(make_task(), goal="g")
+        self.assertEqual(res.outcome, "done", res.summary)
+        self.assertEqual(len(executor.calls), 8)
+
     def test_done_with_pending_items_is_pushed_back_once(self):
         llm = FakeLLM([
             {"plan": ["step a", "step b"], "status": "done", "summary": "too early"},
