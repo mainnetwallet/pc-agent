@@ -506,6 +506,39 @@ def _queued_tasks():
         conn.close()
 
 
+# Tasks the agent was working on. When the server (re)starts, nothing is driving them any more.
+INTERRUPTED_STATUSES = ("DISPATCHED", "PLANNING", "RUNNING", "RECOVERING")
+
+
+def _pause_interrupted_tasks() -> int:
+    """Mark every task that was in flight when the server stopped as WAITING (paused).
+
+    Without this they stay RUNNING in the database forever. Nothing is restarted: a paused
+    task runs again only when the user resumes it. Returns how many tasks were paused.
+    """
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        marks = ",".join("?" * len(INTERRUPTED_STATUSES))
+        cur.execute(_q(f"UPDATE tasks SET status='WAITING', updated_at=? WHERE status IN ({marks})"),
+                    (time.time(), *INTERRUPTED_STATUSES))
+        paused = cur.rowcount
+        conn.commit()
+        return paused
+    finally:
+        conn.close()
+
+
+def _task_ids_with_status(status: str):
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("SELECT id FROM tasks WHERE status=?"), (status,))
+        return [r[0] for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def _update_task(task_id: str, status: str, result=None, error=None):
     now = time.time()
     done = now if status in FINAL_STATES else None
@@ -555,6 +588,11 @@ async def agent_connect(ws: WebSocket):
     await manager.broadcast({"type": "agent.online", "agent_id": _agent["id"]})
     try:
         await _dispatch_queued()
+        # An agent that stayed up while the server restarted may still be running tasks the
+        # server now holds as paused: tell it to pause them too (a no-op for tasks it already
+        # holds paused). Done before any agent report is read, so no stale RUNNING overwrites it.
+        for tid in await asyncio.to_thread(_task_ids_with_status, "WAITING"):
+            await _send_agent({"type": "pause", "task_id": tid})
         while True:
             try:
                 msg = json.loads(await ws.receive_text())
@@ -633,6 +671,9 @@ def chat(req: ChatRequest, _auth=Depends(verify_api_key)):
 async def _startup():
     global _loop
     _loop = asyncio.get_running_loop()
+    paused = await asyncio.to_thread(_pause_interrupted_tasks)
+    if paused:
+        logger.info("Restart: %d interrupted task(s) set to paused (WAITING); resume to continue", paused)
     logger.info("PC Agent Relay started")
 
 @app.get("/health")

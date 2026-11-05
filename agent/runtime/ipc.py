@@ -64,6 +64,10 @@ class RelayClient:
             logger.info("Connected to relay %s", url)
             for tid in self._tracked:           # re-report everything after a reconnect
                 self._tracked[tid] = None
+            # Paused tasks restored after a restart are not tracked yet: report them too, so the
+            # server shows them as paused instead of whatever it had before.
+            for t in task_engine.list_tasks("WAITING"):
+                self._tracked.setdefault(t["id"], None)
             tasks = [asyncio.ensure_future(c) for c in
                      (self._reader(ws), self._heartbeat(ws), self._reporter(ws))]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
