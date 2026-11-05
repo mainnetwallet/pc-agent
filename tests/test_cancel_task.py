@@ -129,6 +129,80 @@ class TestServerCancel(unittest.TestCase):
         self.assertEqual(self.client.post("/tasks/nope/message", json={"message": "x"}).status_code, 404)
 
 
+@unittest.skipIf(_IMPORT_ERROR is not None, f"server deps unavailable: {_IMPORT_ERROR}")
+class TestTaskChatInDatabase(unittest.TestCase):
+    """The whole task chat is stored in the server database, not in the browser."""
+
+    def setUp(self):
+        self.client = TestClient(server.app)
+
+        async def fake_send(msg):
+            return True
+        for p in (mock.patch.object(server, "_send_agent", fake_send),
+                  mock.patch.object(server, "_run_async", lambda coro: asyncio.run(coro))):
+            p.start()
+            self.addCleanup(p.stop)
+        self.tid = f"chat-{time.time_ns()}"
+        insert_task(self.tid)
+
+    def chat(self):
+        return [(m["role"], m["text"]) for m in self.client.get(f"/tasks/{self.tid}/messages").json()["messages"]]
+
+    def test_chat_of_an_older_task_starts_with_its_question(self):
+        self.assertEqual(self.chat(), [("agent", QUESTION)])
+
+    def test_reply_is_stored_and_the_question_is_not_added_again(self):
+        self.client.post(f"/tasks/{self.tid}/message", json={"message": "use -1"})
+        self.assertEqual(self.chat(), [("agent", QUESTION), ("user", "use -1")])
+        self.assertEqual(self.chat(), [("agent", QUESTION), ("user", "use -1")])   # reading again adds nothing
+
+    def test_chat_survives_a_new_client(self):
+        self.client.post(f"/tasks/{self.tid}/message", json={"message": "use -1"})
+        again = TestClient(server.app)   # another browser / device
+        msgs = again.get(f"/tasks/{self.tid}/messages").json()["messages"]
+        self.assertEqual([m["text"] for m in msgs], [QUESTION, "use -1"])
+        self.assertTrue(all(m["created_at"] for m in msgs))
+
+    def test_typed_cancel_is_part_of_the_chat(self):
+        self.client.post(f"/tasks/{self.tid}/message", json={"message": "task cancel koro"})
+        self.assertEqual(self.chat(), [("agent", QUESTION), ("user", "task cancel koro"), ("agent", "Task cancelled.")])
+
+    def test_cancel_button_is_part_of_the_chat(self):
+        self.client.post(f"/tasks/{self.tid}/stop")
+        self.assertEqual(self.chat(), [("agent", QUESTION), ("agent", "Task cancelled.")])
+
+    def test_task_list_counts_the_users_messages(self):
+        def count():
+            return next(t for t in self.client.get("/tasks").json()["tasks"] if t["id"] == self.tid)["user_messages"]
+        self.assertEqual(count(), 0)
+        self.client.post(f"/tasks/{self.tid}/message", json={"message": "use -1"})
+        self.assertEqual(count(), 1)
+
+    def test_deleting_the_task_deletes_its_chat(self):
+        self.client.post(f"/tasks/{self.tid}/message", json={"message": "use -1"})
+        self.client.delete(f"/tasks/{self.tid}")
+        self.assertEqual(server._messages(self.tid), [])
+        self.assertEqual(self.client.get(f"/tasks/{self.tid}/messages").status_code, 404)
+
+    def test_agent_question_and_result_are_stored_once(self):
+        tid = f"agent-{time.time_ns()}"
+        insert_task(tid, status="RUNNING", result=None)
+        with self.client.websocket_connect("/agent/connect") as ws:
+            for _ in range(2):   # a reconnect reports the same status again
+                ws.send_json({"type": "task.update", "task_id": tid, "status": "NEEDS_USER_ACTION",
+                              "result": QUESTION + "\n\nOBSERVE: x"})
+            deadline = time.time() + 3
+            while time.time() < deadline and not server._messages(tid):
+                time.sleep(0.05)
+            time.sleep(0.2)
+            self.assertEqual([(m["role"], m["text"]) for m in server._messages(tid)], [("agent", QUESTION)])
+            ws.send_json({"type": "task.update", "task_id": tid, "status": "COMPLETED", "result": "Done: chatted.\n\nOBSERVE: y"})
+            deadline = time.time() + 3
+            while time.time() < deadline and len(server._messages(tid)) < 2:
+                time.sleep(0.05)
+        self.assertEqual([m["text"] for m in server._messages(tid)], [QUESTION, "Done: chatted."])
+
+
 class TestRestoreWaiting(unittest.TestCase):
     def setUp(self):
         from tasks import engine as engine_mod

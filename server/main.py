@@ -158,13 +158,12 @@ def list_tasks(status: Optional[str] = Query(None), _auth=Depends(verify_api_key
     conn = get_conn()
     try:
         cur = conn.cursor()
+        base = ("SELECT t.*, (SELECT COUNT(*) FROM task_messages m WHERE m.task_id = t.id AND m.role = 'user') "
+                "AS user_messages FROM tasks t")
         if status:
-            if USE_POSTGRES:
-                cur.execute("SELECT * FROM tasks WHERE status=%s ORDER BY created_at DESC", (status,))
-            else:
-                cur.execute("SELECT * FROM tasks WHERE status=? ORDER BY created_at DESC", (status,))
+            cur.execute(_q(base + " WHERE t.status=? ORDER BY t.created_at DESC"), (status,))
         else:
-            cur.execute("SELECT * FROM tasks ORDER BY created_at DESC")
+            cur.execute(base + " ORDER BY t.created_at DESC")
         rows = cur.fetchall()
         cols = [d[0] for d in cur.description]
         out = [dict(zip(cols, r)) for r in rows]
@@ -204,6 +203,65 @@ def is_cancel_command(text: str) -> bool:
             and all(w in _CANCEL_WORDS or w in _CANCEL_FILLER for w in words))
 
 
+# --------------------------------------------------------------------------- task chat (stored in the DB)
+def _first_paragraph(text) -> str:
+    """What the agent says: the first paragraph (the rest of a task result is internal evidence)."""
+    return (text or "").strip().split("\n\n")[0].strip()
+
+
+def _add_message(task_id: str, role: str, text: str) -> bool:
+    """Append one chat message to the task. A message identical to the previous one is skipped."""
+    text = (text or "").strip()
+    if not text:
+        return False
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("SELECT role, text FROM task_messages WHERE task_id=? ORDER BY id DESC LIMIT 1"), (task_id,))
+        last = cur.fetchone()
+        if last and last[0] == role and last[1] == text:
+            return False
+        cur.execute(_q("INSERT INTO task_messages(task_id, role, text, created_at) VALUES(?,?,?,?)"),
+                    (task_id, role, text, time.time()))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def _messages(task_id: str) -> list:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("SELECT id, role, text, created_at FROM task_messages WHERE task_id=? ORDER BY id ASC"), (task_id,))
+        return [{"id": r[0], "role": r[1], "text": r[2], "created_at": r[3]} for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _sync_status_message(task_id: str) -> None:
+    """Write what the task's current status says into its chat (the question, the result, the failure)."""
+    row = _task_row(task_id)
+    if not row:
+        return
+    status = row["status"]
+    text = ""
+    if status in ("NEEDS_USER_ACTION", "COMPLETED"):
+        text = _first_paragraph(row.get("result"))
+    elif status == "FAILED":
+        text = _first_paragraph(row.get("error")) or _first_paragraph(row.get("result"))
+    elif status == "CANCELLED":
+        text = "Task cancelled."
+    _add_message(task_id, "agent", text)
+
+
+def _backfill_messages(task_id: str) -> None:
+    """A task from before chats were stored has no messages: start its chat from its current status.
+    Only when empty, so a question the user already answered is never added a second time."""
+    if not _messages(task_id):
+        _sync_status_message(task_id)
+
+
 def _task_row(task_id: str):
     conn = get_conn()
     try:
@@ -228,7 +286,9 @@ def _cancel_task(task_id: str) -> bool:
     if row is None:
         return False
     if row["status"] not in FINAL_STATES:
+        _backfill_messages(task_id)
         _update_task(task_id, "CANCELLED")
+        _sync_status_message(task_id)
         _broadcast({"type": "task.updated", "task_id": task_id, "status": "CANCELLED"})
     _broadcast({"type": "task.stop", "task_id": task_id})
     _run_async(_send_agent({"type": "stop", "task_id": task_id}))
@@ -240,6 +300,8 @@ def task_message(task_id: str, msg: TaskMessage, _auth=Depends(verify_api_key)):
     row = _task_row(task_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Task not found")
+    _backfill_messages(task_id)
+    _add_message(task_id, "user", msg.message)
     if row["status"] not in FINAL_STATES and is_cancel_command(msg.message):
         _cancel_task(task_id)
         return {"ok": True, "cancelled": True}
@@ -257,6 +319,13 @@ def stop_task(task_id: str, _auth=Depends(verify_api_key)):
     _cancel_task(task_id)
     return {"ok": True}
 
+@app.get("/tasks/{task_id}/messages")
+def task_messages(task_id: str, _auth=Depends(verify_api_key)):
+    if _task_row(task_id) is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _backfill_messages(task_id)
+    return {"task_id": task_id, "messages": _messages(task_id)}
+
 @app.delete("/tasks/{task_id}")
 def delete_task(task_id: str, _auth=Depends(verify_api_key)):
     """Remove a task from the list. A task that is still active is cancelled first so the agent stops it."""
@@ -267,6 +336,7 @@ def delete_task(task_id: str, _auth=Depends(verify_api_key)):
     try:
         cur = conn.cursor()
         cur.execute(_q("DELETE FROM events WHERE task_id=?"), (task_id,))
+        cur.execute(_q("DELETE FROM task_messages WHERE task_id=?"), (task_id,))
         cur.execute(_q("DELETE FROM tasks WHERE id=?"), (task_id,))
         conn.commit()
     finally:
@@ -450,6 +520,14 @@ def _update_task(task_id: str, status: str, result=None, error=None):
         conn.close()
 
 
+def _record_agent_update(task_id: str, status: str, result=None, error=None) -> None:
+    """Store the agent's status report, and its question/result in the task chat when the status changes."""
+    before = _task_row(task_id)
+    _update_task(task_id, status, result, error)
+    if before and before["status"] != status:
+        _sync_status_message(task_id)
+
+
 async def _dispatch_queued():
     """Send every QUEUED task to the connected agent."""
     if _agent["ws"] is None:
@@ -484,7 +562,7 @@ async def agent_connect(ws: WebSocket):
                 continue
             _agent["last_seen"] = time.time()
             if msg.get("type") == "task.update" and msg.get("task_id") and msg.get("status") != "QUEUED":
-                await asyncio.to_thread(_update_task, msg["task_id"], msg.get("status", "RUNNING"),
+                await asyncio.to_thread(_record_agent_update, msg["task_id"], msg.get("status", "RUNNING"),
                                         msg.get("result"), msg.get("error"))
                 await manager.broadcast({"type": "task.updated", "task_id": msg["task_id"],
                                          "status": msg.get("status"), "result": msg.get("result"),

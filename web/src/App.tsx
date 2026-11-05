@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { api, setToken } from "./api";
 
-type Task = { id: string; instruction: string; status: string; result?: string | null };
+type Task = { id: string; instruction: string; status: string; result?: string | null; user_messages?: number };
 type Status = { online?: boolean; streaming?: boolean };
 
 const LABEL: Record<string, string> = {
@@ -65,14 +65,12 @@ function Actions({ t, done, chat, onDelete }: { t: Task; done: () => void; chat?
   const remove = () => {
     const msg = ACTIVE.includes(t.status) ? "Cancel and delete this task? It cannot be undone." : "Delete this task? It cannot be undone.";
     if (!window.confirm(msg)) return;
-    run(api.deleteTask, () => { try { localStorage.removeItem(THREAD_KEY(t.id)); } catch { /* storage blocked */ } onDelete?.(); });
+    run(api.deleteTask, () => onDelete?.());
   };
   return (
     <span className="acts">
       {err && <span className="err" role="alert">{err}</span>}
-      {chat && (t.status === "NEEDS_USER_ACTION" || loadThread(t.id).length > 0) && (
-        <button className={t.status === "NEEDS_USER_ACTION" ? "primary" : ""} onClick={chat}>{t.status === "NEEDS_USER_ACTION" ? "Reply" : "Open chat"}</button>
-      )}
+      {chat && <button className={t.status === "NEEDS_USER_ACTION" ? "primary" : ""} onClick={chat}>{t.status === "NEEDS_USER_ACTION" ? "Reply" : "Open chat"}</button>}
       {t.status === "RUNNING" && <button onClick={() => run(api.pauseTask)}>Pause</button>}
       {t.status === "WAITING" && <button onClick={() => run(api.resumeTask)}>Resume</button>}
       {ACTIVE.includes(t.status) && <button className="danger" onClick={() => run(api.stopTask)}>Cancel</button>}
@@ -257,19 +255,10 @@ function Chat({ openTasks }: { openTasks: () => void }) {
   );
 }
 
-const THREAD_KEY = (id: string) => `pc_agent_thread_${id}`;
-type Turn = { role: "agent" | "user"; text: string };
-const loadThread = (id: string): Turn[] => {
-  try { const v = JSON.parse(localStorage.getItem(THREAD_KEY(id)) || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
-};
-const saveThread = (id: string, turns: Turn[]) => {
-  try { localStorage.setItem(THREAD_KEY(id), JSON.stringify(turns.slice(-40))); } catch { /* storage blocked */ }
-};
-/** Task ids whose reply was just sent -> when. Until the status moves on we show "sent" instead of the old question. */
-const SENT = new Map<string, number>();
-const SENT_TTL = 20000;
-/** What the agent asked: the first paragraph of the task result (the rest is internal evidence). */
-const askedQuestion = (t: Task) => (t.result ?? "").trim().split("\n\n")[0].trim();
+/** One message of a task's chat. The whole chat is stored in the server database. */
+type ChatMsg = { id: number; role: "agent" | "user"; text: string; created_at: number };
+/** After a reply the agent should move the task on within this time (ms). */
+const REPLY_TTL = 20000;
 
 function NavBadge() {
   const { tasks } = useTasks("NEEDS_USER_ACTION");
@@ -277,25 +266,33 @@ function NavBadge() {
 }
 
 function TaskChat({ t, reload }: { t: Task; reload: () => void }) {
-  const [turns, setTurns] = useState<Turn[]>(() => loadThread(t.id));
+  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const asking = t.status === "NEEDS_USER_ACTION";
-  const q = askedQuestion(t);
+  const [now, setNow] = useState(Date.now());
   const end = useRef<HTMLDivElement>(null);
-  // The status moved on, so the agent got the reply: forget the "sent" marker.
-  useEffect(() => { if (!asking) SENT.delete(t.id); }, [asking, t.id]);
-  const sentAt = SENT.get(t.id);
-  const waiting = asking && sentAt !== undefined && Date.now() - sentAt < SENT_TTL;
-  const timedOut = asking && sentAt !== undefined && !waiting;
-  const shown: Turn[] = [{ role: "user", text: t.instruction }, ...turns];
-  if (asking && sentAt === undefined && q) shown.push({ role: "agent", text: q });
-  // A finished task shows its result. A cancelled one shows the open question only if the user never replied.
-  const showResult = ["COMPLETED", "FAILED"].includes(t.status) || (t.status === "CANCELLED" && turns.length === 0);
-  if (showResult && q && shown[shown.length - 1]?.text !== q) shown.push({ role: "agent", text: q });
+  const load = useCallback(async () => {
+    try {
+      const res = await api.taskMessages(t.id);
+      if (res.ok) { setMsgs((await res.json()).messages ?? []); setLoaded(true); }
+    } catch { /* server unreachable: keep what is shown */ }
+  }, [t.id]);
+  // Poll, and reload at once when the task moves to another status (the agent just asked or answered).
+  useEffect(() => { load(); const iv = setInterval(load, 3000); return () => clearInterval(iv); }, [load]);
+  useEffect(() => { load(); }, [t.status, load]);
+  useEffect(() => { const iv = setInterval(() => setNow(Date.now()), 2000); return () => clearInterval(iv); }, []);
 
-  useEffect(() => { end.current?.scrollIntoView({ block: "nearest" }); }, [shown.length, waiting]);
+  const asking = t.status === "NEEDS_USER_ACTION";
+  const last = msgs[msgs.length - 1];
+  // The reply is stored, but the task is still waiting: the PC has not moved it on yet.
+  const replied = asking && last?.role === "user";
+  const waiting = replied && now - last.created_at * 1000 < REPLY_TTL;
+  const timedOut = replied && !waiting;
+  const shown: { role: string; text: string }[] = [{ role: "user", text: t.instruction }, ...msgs];
+
+  useEffect(() => { end.current?.scrollIntoView({ block: "nearest" }); }, [msgs.length, waiting]);
 
   const send = async (e: FormEvent) => {
     e.preventDefault();
@@ -305,14 +302,7 @@ function TaskChat({ t, reload }: { t: Task; reload: () => void }) {
     try {
       const res = await api.taskMessage(t.id, message);
       if (!res.ok) throw new Error(`The server refused the reply (HTTP ${res.status}).`);
-      const cancelled = !!(await res.json().catch(() => ({})))?.cancelled;
-      const next: Turn[] = [...turns];
-      if (asking && q && next[next.length - 1]?.text !== q) next.push({ role: "agent", text: q });
-      next.push({ role: "user", text: message });
-      if (cancelled) next.push({ role: "agent", text: "Task cancelled." });
-      setTurns(next); saveThread(t.id, next);
-      if (asking && !cancelled) SENT.set(t.id, Date.now());
-      setText(""); reload();
+      setText(""); await load(); reload();
     } catch (x: any) {
       setErr(x.message === "Failed to fetch" ? "Can't reach the server on port 8000. Start it with “pc”, then try again." : x.message || "Couldn't send the reply.");
     } finally { setBusy(false); }
@@ -324,6 +314,7 @@ function TaskChat({ t, reload }: { t: Task; reload: () => void }) {
         {shown.map((m, i) => (
           <div key={i} className={`msg ${m.role}`}><p>{m.text}</p></div>
         ))}
+        {!loaded && <p className="hint">Loading the conversation…</p>}
         <div ref={end} />
       </div>
       {waiting && <p className="hint">Reply sent. The agent is continuing the task…</p>}
@@ -343,7 +334,7 @@ function ActionPage({ selected }: { selected: string }) {
   const { tasks, reload, loaded } = useTasks();
   const [copied, setCopied] = useState(false);
   const asking = tasks.filter(t => t.status === "NEEDS_USER_ACTION");
-  const earlier = tasks.filter(t => t.status !== "NEEDS_USER_ACTION" && (loadThread(t.id).length > 0 || t.id === selected));
+  const earlier = tasks.filter(t => t.status !== "NEEDS_USER_ACTION" && ((t.user_messages ?? 0) > 0 || t.id === selected));
   // No id in the link: open the first task that needs an answer (desktop shows list + chat side by side).
   const current = selected ? tasks.find(t => t.id === selected) : asking[0];
   const link = `${location.origin}${location.pathname}#/action/${encodeURIComponent(current?.id ?? "")}`;

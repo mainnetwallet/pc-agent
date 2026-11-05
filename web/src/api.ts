@@ -20,6 +20,7 @@ export const api = {
   streamStop: () => request("/pc/stream/stop", { method: "POST" }),
   tasks: (status?: string) => request("/tasks" + (status ? `?status=${status}` : "")),
   getTask: (id: string) => request(`/tasks/${id}`),
+  taskMessages: (id: string) => request(`/tasks/${id}/messages`),
   createTask: (instruction: string) => request("/tasks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ instruction }) }),
   stopTask: (id: string) => request(`/tasks/${id}/stop`, { method: "POST" }),
   deleteTask: (id: string) => request(`/tasks/${id}`, { method: "DELETE" }),
