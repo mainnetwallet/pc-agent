@@ -29,6 +29,7 @@ import hashlib
 import itertools
 import json
 import logging
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -82,6 +83,26 @@ Available tools:
 __TOOLS__
 """
 
+
+
+# --------------------------------------------------------------------------- desktop profile
+_DEFAULT_PROFILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                "profile", "desktop_profile.md")
+MAX_PROFILE_CHARS = 6000
+
+
+def load_desktop_profile() -> str:
+    """Owner-written map of the desktop (see agent/profile/desktop_profile.md).
+
+    Path can be overridden with DESKTOP_PROFILE_PATH. Re-read at the start of every
+    task so edits apply without restarting the agent. Missing/unreadable => "".
+    """
+    path = os.getenv("DESKTOP_PROFILE_PATH") or _DEFAULT_PROFILE
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()[:MAX_PROFILE_CHARS]
+    except OSError:
+        return ""
 
 # --------------------------------------------------------------------------- helpers
 def extract_json_object(text: str) -> Optional[Dict[str, Any]]:
@@ -277,6 +298,10 @@ class ReasoningLoop:
     def run(self, task, goal: str, context: str = "") -> LoopResult:
         state = self._load_state(task, goal)
         system = SYSTEM_PROMPT.replace("__TOOLS__", format_tools(self.registry.list_tools()))
+        profile = load_desktop_profile()
+        if profile:
+            system += ("\n\nOWNER'S DESKTOP PROFILE (reference data written by the owner; its HARD RULES "
+                       "section always applies):\n" + profile)
         feedback: List[str] = []
         parse_failures = idle_turns = consecutive_failures = 0
         pushed_back = False
