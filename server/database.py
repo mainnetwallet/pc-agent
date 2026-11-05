@@ -66,6 +66,13 @@ def init_db():
                     created_at REAL
                 );
                 CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages(task_id, id);
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id SERIAL PRIMARY KEY,
+                    role TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    task_id TEXT,
+                    created_at REAL
+                );
             """)
         else:
             cur.executescript("""
@@ -105,6 +112,13 @@ def init_db():
                     created_at REAL
                 );
                 CREATE INDEX IF NOT EXISTS idx_task_messages_task ON task_messages(task_id, id);
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    task_id TEXT,
+                    created_at REAL
+                );
             """)
         conn.commit()
     finally:

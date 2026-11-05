@@ -18,6 +18,8 @@ Endpoints:
   POST   /devices/pair
   GET    /devices/me
   POST   /chat
+  GET    /chat/messages
+  DELETE /chat/messages
   POST   /auth/token
   WebSocket /ws/{device_token}
   POST   /webrtc/signal
@@ -621,7 +623,86 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    # Ignored: the server keeps the whole conversation itself. Still accepted so older clients work.
     history: list[ChatMessage] = []
+
+
+def _add_chat_message(role: str, text: str, task_id: Optional[str] = None) -> None:
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute(_q("INSERT INTO chat_messages(role, text, task_id, created_at) VALUES(?,?,?,?)"),
+                    (role, text, task_id, time.time()))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _chat_rows() -> list:
+    """Every chat message, oldest first, with the current status of the task it started (if any)."""
+    conn = get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT c.id, c.role, c.text, c.task_id, c.created_at, t.status, t.instruction "
+                    "FROM chat_messages c LEFT JOIN tasks t ON t.id = c.task_id ORDER BY c.id ASC")
+        return [{"id": r[0], "role": r[1], "text": r[2], "task_id": r[3], "created_at": r[4],
+                 "status": r[5], "instruction": r[6]} for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def _chat_history_for_llm() -> list:
+    """The whole stored conversation, as LLM messages. No cap on its length.
+
+    The assistant's earlier answers go back in the JSON form the system prompt demands. With
+    plain-text answers in a long history the model drifts into plain text too, and then a request
+    to do something on the PC would no longer start a task.
+    """
+    out = []
+    for m in _chat_rows():
+        if m["role"] == "user":
+            out.append({"role": "user", "content": m["text"]})
+        else:
+            if m["task_id"] and m["instruction"]:
+                body = {"action": "task", "instruction": m["instruction"], "reply": m["text"]}
+            else:
+                body = {"action": "reply", "reply": m["text"]}
+            out.append({"role": "assistant", "content": json.dumps(body, ensure_ascii=False)})
+    return out
+
+
+_CONTEXT_HINTS = ("context length", "context_length", "context window", "maximum context",
+                  "too long", "too many tokens", "reduce the length", "token limit")
+
+
+def _is_context_overflow(e: Exception) -> bool:
+    resp = getattr(e, "response", None)
+    if resp is None:
+        return False
+    try:
+        body = resp.text.lower()
+    except Exception:
+        return False
+    return resp.status_code == 413 or (resp.status_code == 400 and any(h in body for h in _CONTEXT_HINTS))
+
+
+def _ask_chat_llm(llm, system: str, hist: list, text: str):
+    """Send the WHOLE history. Only when the model says it cannot hold that much, retry with the
+    newest part of it. What is stored in the database is never cut."""
+    msgs = list(hist)
+    while True:
+        try:
+            return llm.chat([{"role": "system", "content": system}, *msgs, {"role": "user", "content": text}],
+                            temperature=0.3, max_tokens=500)
+        except Exception as e:
+            if not msgs or not _is_context_overflow(e):
+                raise
+            msgs = msgs[max(2, len(msgs) // 2):]          # drop the oldest half
+            while msgs and msgs[0]["role"] != "user":
+                msgs.pop(0)
+            logger.warning("chat: history too long for the model, retrying with the latest %d of %d messages",
+                           len(msgs), len(hist))
+
 
 _CHAT_SYSTEM = (
     "You are the assistant in the dashboard of an autonomous Windows PC agent. "
@@ -643,12 +724,9 @@ def chat(req: ChatRequest, _auth=Depends(verify_api_key)):
         return {"reply": SETUP_HINT, "task_id": None, "status": None}
     recent = "; ".join(f"{t['status']}: {t['instruction'][:60]}" for t in list_tasks(status=None)["tasks"][:5]) or "none"
     system = _CHAT_SYSTEM + f"PC agent online: {pc_status()['online']}. Recent tasks: {recent}."
-    hist = [{"role": m.role, "content": m.content} for m in req.history[-10:] if m.role in ("user", "assistant")]
-    while hist and hist[0]["role"] != "user":
-        hist.pop(0)
+    hist = _chat_history_for_llm()
     try:
-        resp = llm.chat([{"role": "system", "content": system}, *hist, {"role": "user", "content": text}],
-                        temperature=0.3, max_tokens=500)
+        resp = _ask_chat_llm(llm, system, hist, text)
     except Exception as e:  # not configured, provider down, bad key... surface it; never guess intent
         logger.warning("chat: LLM call failed: %s", e)
         raise HTTPException(status_code=503, detail=f"The language model isn't working: {e}")
@@ -664,7 +742,31 @@ def chat(req: ChatRequest, _auth=Depends(verify_api_key)):
     if instruction:
         t = create_task(TaskCreate(instruction=instruction))
         out.update(task_id=t["task_id"], status=t["status"])
+    # Saved only once the model answered, so the stored conversation is always whole exchanges.
+    _add_chat_message("user", text)
+    _add_chat_message("agent", out["reply"], out["task_id"])
     return out
+
+
+@app.get("/chat/messages")
+def chat_messages(_auth=Depends(verify_api_key)):
+    """The whole stored chat, oldest first."""
+    return {"messages": [
+        {"id": m["id"], "role": m["role"], "text": m["text"], "created_at": m["created_at"],
+         "task": {"id": m["task_id"], "status": m["status"] or "QUEUED"} if m["task_id"] else None}
+        for m in _chat_rows()]}
+
+
+@app.delete("/chat/messages")
+def clear_chat(_auth=Depends(verify_api_key)):
+    """Forget the conversation (the Clear button). Nothing else is ever deleted from it."""
+    conn = get_conn()
+    try:
+        conn.cursor().execute("DELETE FROM chat_messages")
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
 
 
 @app.on_event("startup")

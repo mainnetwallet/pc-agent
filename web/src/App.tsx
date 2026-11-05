@@ -205,27 +205,41 @@ function Console({ online, openTasks, openChat }: { online: boolean; openTasks: 
 }
 
 type Msg = { role: "user" | "agent"; text: string; task?: { id: string; status: string }; fail?: boolean };
-const CHAT_KEY = "pc_agent_chat";
 
+/** The conversation lives in the server database, so it is the same on every device and never cut short. */
 function Chat({ openTasks }: { openTasks: () => void }) {
-  const [msgs, setMsgs] = useState<Msg[]>(() => {
-    try { return JSON.parse(localStorage.getItem(CHAT_KEY) || "[]"); } catch { return []; }
-  });
+  const [msgs, setMsgs] = useState<Msg[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    try { localStorage.setItem(CHAT_KEY, JSON.stringify(msgs.slice(-50))); } catch { /* storage blocked */ }
-    end.current?.scrollIntoView({ block: "end" });
-  }, [msgs, busy]);
+    try { localStorage.removeItem("pc_agent_chat"); } catch { /* the old browser-only copy is no longer used */ }
+    let alive = true;
+    (async () => {
+      try {
+        const res = await api.chatMessages();
+        if (res.ok && alive) setMsgs(((await res.json()).messages ?? []).map((m: any) => ({ role: m.role, text: m.text, task: m.task ?? undefined })));
+      } catch { /* server not reachable: the chat starts empty and sending shows the error */ }
+      if (alive) setLoaded(true);
+    })();
+    return () => { alive = false; };
+  }, []);
+  useEffect(() => { end.current?.scrollIntoView({ block: "end" }); }, [msgs, busy, loaded]);
+  const clear = async () => {
+    try {
+      const res = await api.clearChat();
+      if (!res.ok) throw new Error();
+      setMsgs([]);
+    } catch { setMsgs(m => [...m, { role: "agent", fail: true, text: "Couldn't clear the chat on the server. Try again." }]); }
+  };
   const send = async (e: FormEvent) => {
     e.preventDefault();
     const message = text.trim();
     if (!message || busy) return;
-    const history = msgs.filter(m => !m.fail).slice(-10).map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
     setMsgs(m => [...m, { role: "user", text: message }]); setText(""); setBusy(true);
     try {
-      const res = await api.chat(message, history);
+      const res = await api.chat(message);
       const d = await res.json();
       if (!res.ok) throw new Error(typeof d?.detail === "string" ? d.detail : `The server refused the request (HTTP ${res.status}).`);
       setMsgs(m => [...m, { role: "agent", text: d.reply, task: d.task_id ? { id: d.task_id, status: d.status } : undefined }]);
@@ -236,7 +250,8 @@ function Chat({ openTasks }: { openTasks: () => void }) {
   return (
     <div className="chat">
       <div className="log" aria-live="polite">
-        {msgs.length === 0 && <p className="empty">Ask about your PC agent, or tell it what to do. For example: “What is running now?” or “Open Notepad and write a note.”</p>}
+        {!loaded && <p className="empty">Loading the conversation…</p>}
+        {loaded && msgs.length === 0 && <p className="empty">Ask about your PC agent, or tell it what to do. For example: “What is running now?” or “Open Notepad and write a note.”</p>}
         {msgs.map((m, i) => (
           <div key={i} className={`msg ${m.role}${m.fail ? " fail" : ""}`}>
             <p>{m.text}</p>
@@ -249,7 +264,7 @@ function Chat({ openTasks }: { openTasks: () => void }) {
       <form className="compose" onSubmit={send}>
         <input value={text} onChange={e => setText(e.target.value)} placeholder="Message the agent" aria-label="Message" autoComplete="off" />
         <button className="primary" disabled={busy || !text.trim()}>Send</button>
-        {msgs.length > 0 && <button type="button" onClick={() => setMsgs([])}>Clear</button>}
+        {msgs.length > 0 && <button type="button" onClick={clear}>Clear</button>}
       </form>
     </div>
   );

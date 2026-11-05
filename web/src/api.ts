@@ -27,5 +27,8 @@ export const api = {
   pauseTask: (id: string) => request(`/tasks/${id}/pause`, { method: "POST" }),
   resumeTask: (id: string) => request(`/tasks/${id}/resume`, { method: "POST" }),
   taskMessage: (id: string, message: string) => request(`/tasks/${id}/message`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) }),
-  chat: (message: string, history: { role: string; content: string }[]) => request("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, history }) }),
+  /** The server keeps the whole conversation, so only the new message is sent. */
+  chat: (message: string) => request("/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message }) }),
+  chatMessages: () => request("/chat/messages"),
+  clearChat: () => request("/chat/messages", { method: "DELETE" }),
 };
