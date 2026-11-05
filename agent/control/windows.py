@@ -4,12 +4,16 @@ Discovers running windows, launches applications, activates/switches/closes wind
 """
 
 import os
-import subprocess
+import time
 from typing import List, Optional
 
 import pygetwindow as gw  # type: ignore
 
 from control.desktop import DesktopControl
+from control.launcher import (  # noqa: F401  (discover_installed_apps is re-exported)
+    discover_installed_apps, exact_desktop_match, launch_by_name, launch_path,
+    list_desktop_items,
+)
 
 
 class WindowControl:
@@ -77,49 +81,52 @@ class WindowControl:
 
     # --------------------------------------------------------------- applications
     def launch_application(self, app_name_or_path: str) -> Optional[int]:
-        """Launch an application by name or path. Returns the PID if started."""
-        # If it's an existing path, launch directly
-        if app_name_or_path and os.path.exists(app_name_or_path):
-            try:
-                proc = subprocess.Popen([app_name_or_path], creationflags=subprocess.CREATE_NO_WINDOW)
-                return proc.pid
-            except Exception:
-                pass
+        """Launch an application, shortcut, folder or file by name or path.
 
-        # Direct system executable fallback (notepad.exe, calc.exe, etc.)
-        for sysdir in (os.environ.get("WINDIR", r"C:\Windows"),
-                       os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32")):
-            candidate = os.path.join(sysdir, f"{app_name_or_path}.exe")
+        Returns the PID if started, 0 if the shell opened it (no PID available), or None
+        if nothing could be opened. Things on the Desktop are found by name, so
+        "open Chrome" works with a Chrome icon on the desktop.
+        """
+        target = (app_name_or_path or "").strip().strip('"')
+        if not target:
+            return None
+
+        # 1. An explicit path (file, folder, shortcut)
+        if os.path.exists(target):
+            pid = launch_path(target)
+            if pid is not None:
+                return pid
+
+        # 2. An icon on the Desktop with exactly this name wins over anything else
+        icon = exact_desktop_match(target)
+        if icon:
+            pid = launch_path(icon["path"])
+            if pid is not None:
+                return pid
+
+        # 3. System executables (notepad.exe, calc.exe, ...)
+        windir = os.environ.get("WINDIR", r"C:\Windows")
+        for sysdir in (windir, os.path.join(windir, "System32")):
+            candidate = os.path.join(sysdir, f"{target}.exe")
             if os.path.exists(candidate):
-                try:
-                    proc = subprocess.Popen([candidate], creationflags=subprocess.CREATE_NO_WINDOW)
-                    return proc.pid
-                except Exception:
-                    pass
+                pid = launch_path(candidate)
+                if pid is not None:
+                    return pid
 
-        # Try shell association (os.startfile)
+        # 4. Shell association / App Paths ("chrome", "excel", "https://...")
         try:
-            os.startfile(app_name_or_path)
+            os.startfile(target)
             time.sleep(1.0)
-            # best effort; return None since we can't get PID
             return 0
         except Exception:
             pass
 
-        # Otherwise try common locations / registry uninstall + start menu shortcuts
-        discovered = discover_installed_apps()
-        matches = [a for a in discovered if app_name_or_path.lower() in a["name"].lower()]
-        if not matches:
-            matches = [a for a in discovered if a["name"].lower().startswith(app_name_or_path.lower())]
-        if matches:
-            exe = matches[0].get("executable")
-            if exe and os.path.exists(exe):
-                try:
-                    proc = subprocess.Popen([exe], creationflags=subprocess.CREATE_NO_WINDOW)
-                    return proc.pid
-                except Exception:
-                    pass
-        return None
+        # 5. Fuzzy match on Desktop icons, Start Menu shortcuts, then installed apps
+        return launch_by_name(target)
+
+    def list_desktop_items(self) -> List[dict]:
+        """Icons currently on the Desktop (name, path, type)."""
+        return list_desktop_items()
 
     def close_application(self, app_name: str) -> bool:
         """Close windows belonging to an application by title match."""
@@ -136,72 +143,3 @@ class WindowControl:
 
 # Module-level instance
 windows = WindowControl()
-
-
-def discover_installed_apps() -> List[dict]:
-    """Discover installed applications from Windows uninstall registry and start menu shortcuts.
-
-    Returns list of {name, executable, source}.
-    """
-    import winreg  # Windows-only
-
-    apps: List[dict] = []
-    seen = set()
-
-    def _add(name: str, exe: Optional[str], source: str) -> None:
-        if not name or name in seen:
-            return
-        seen.add(name)
-        apps.append({"name": name, "executable": exe, "source": source})
-
-    # Uninstall registry (HKLM and HKCU, 32 and 64 bit)
-    roots = [
-        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-        (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
-    ]
-    for hive, subkey in roots:
-        for flags in (winreg.KEY_READ, winreg.KEY_READ | 0x0100, winreg.KEY_READ | 0x0200):
-            # 0x0100=KEY_WOW64_32KEY, 0x0200=KEY_WOW64_64KEY
-            try:
-                with winreg.OpenKey(hive, subkey, 0, flags) as key:
-                    for i in range(winreg.QueryInfoKey(key)[0]):
-                        try:
-                            sub = winreg.EnumKey(key, i)
-                            with winreg.OpenKey(key, sub) as skey:
-                                try:
-                                    name = winreg.QueryValueEx(skey, "DisplayName")[0]
-                                except Exception:
-                                    continue
-                                exe = None
-                                try:
-                                    exe = winreg.QueryValueEx(skey, "DisplayIcon")[0]
-                                    if exe and exe.endswith(",0"):
-                                        exe = exe[:-2]
-                                except Exception:
-                                    try:
-                                        exe = winreg.QueryValueEx(skey, "InstallLocation")[0]
-                                    except Exception:
-                                        exe = None
-                                _add(name, exe, "registry")
-                        except Exception:
-                            continue
-            except Exception:
-                continue
-
-    # Start menu shortcuts
-    start_menu_dirs = [
-        os.path.expandvars(r"%ProgramData%\Microsoft\Windows\Start Menu\Programs"),
-        os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
-    ]
-    for sm in start_menu_dirs:
-        if not os.path.isdir(sm):
-            continue
-        for root, _, files in os.walk(sm):
-            for f in files:
-                if f.lower().endswith((".lnk", ".url")):
-                    full = os.path.join(root, f)
-                    name = os.path.splitext(f)[0]
-                    _add(name, full, "start_menu")
-
-    return apps
-

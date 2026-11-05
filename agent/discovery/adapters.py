@@ -249,9 +249,20 @@ class DesktopAdapter(ApplicationAdapter):
     def _launch_application(self, app_name_or_path: str) -> Dict[str, Any]:
         pid = windows.launch_application(app_name_or_path)
         if pid is None:
-            return {"ok": False, "error": f"Could not launch {app_name_or_path}"}
+            hint = ""
+            try:
+                names = [i["name"] for i in windows.list_desktop_items()][:25]
+                if names:
+                    hint = " Desktop items: " + ", ".join(names)
+            except Exception:
+                pass
+            return {"ok": False, "error": f"Could not launch {app_name_or_path}.{hint}"}
         time.sleep(1.5)
         return {"ok": True, "pid": pid, "launched": app_name_or_path}
+
+    def _list_desktop_items(self) -> Dict[str, Any]:
+        items = windows.list_desktop_items()
+        return {"ok": True, "count": len(items), "items": items}
 
     def _click(self, x: int, y: int, button: str = "left") -> Dict[str, Any]:
         self.desktop.click(x, y, button=button)
@@ -285,8 +296,17 @@ class DesktopAdapter(ApplicationAdapter):
             {
                 "tool_name": "desktop.launch_application",
                 "callable": self._launch_application,
-                "description": "Launch an application by name or path",
+                "description": "Open an application, Desktop icon/shortcut, folder or file by name or path",
                 "input_schema": {"type": "object", "properties": {"app_name_or_path": {"type": "string"}}, "required": ["app_name_or_path"]},
+                "permission": "owner",
+                "category": "desktop",
+            },
+            {
+                "tool_name": "desktop.list_desktop_items",
+                "callable": self._list_desktop_items,
+                "description": "List the icons on the Desktop (shortcuts, programs, folders, files) "
+                               "that desktop.launch_application can open by name",
+                "input_schema": {"type": "object", "properties": {}, "required": []},
                 "permission": "owner",
                 "category": "desktop",
             },
