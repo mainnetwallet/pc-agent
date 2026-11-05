@@ -15,10 +15,12 @@ from typing import Any, Dict, List, Optional
 
 from config import (
     AGENT_HISTORY_WINDOW, AGENT_MAX_ACTIONS_PER_TURN, AGENT_MAX_ITERATIONS,
-    AGENT_OBSERVE_OCR, LLM_ENABLE_VISION,
+    AGENT_OBSERVE_OCR, AGENT_OBSERVE_OCR_CHARS, AGENT_SETTLE_QUIET, AGENT_SETTLE_TIMEOUT,
+    LLM_ENABLE_VISION,
 )
 from control.desktop import DesktopControl
 from screen.capture import capture_engine
+from screen.settle import wait_until_stable
 from discovery.registry import registry
 from tasks.engine import task_engine, TaskStatus
 from core.loop import LoopResult, Observation, ReasoningLoop
@@ -89,6 +91,7 @@ class Agent:
             max_actions_per_turn=AGENT_MAX_ACTIONS_PER_TURN,
             history_window=AGENT_HISTORY_WINDOW,
             use_vision=LLM_ENABLE_VISION,
+            settle=self._settle_screen if AGENT_SETTLE_TIMEOUT > 0 else None,
         )
         with task_engine._lock:
             t = task_engine._tasks[task_id]
@@ -131,6 +134,16 @@ class Agent:
             task_engine.fail(task_id, final)
         return final
 
+    def _settle_screen(self, should_stop=None) -> Dict[str, Any]:
+        """Block until the screen stops changing (or the timeout), so the next observation
+        shows a finished page / fully written reply, not a half-loaded one."""
+        def grab():
+            _, pil = self.desktop.screenshot(save=False)
+            return pil
+
+        return wait_until_stable(grab, timeout=AGENT_SETTLE_TIMEOUT,
+                                 quiet_for=AGENT_SETTLE_QUIET, should_stop=should_stop)
+
     def _loop_observation(self) -> Observation:
         """Fresh view of the PC for the LLM: windows, OCR text and (optionally) a screenshot."""
         parts: List[str] = []
@@ -152,7 +165,8 @@ class Agent:
             if AGENT_OBSERVE_OCR and pil is not None:
                 text = self.desktop.ocr(image=pil).strip()
                 if text:
-                    parts.append("screen_text (OCR, may be inaccurate):\n" + text[:1500])
+                    parts.append("screen_text (OCR, may be inaccurate):\n"
+                                 + text[:AGENT_OBSERVE_OCR_CHARS])
         except Exception as e:
             parts.append(f"screenshot: unavailable ({e})")
         return Observation(text="\n".join(parts), image_path=image_path)

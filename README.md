@@ -233,6 +233,20 @@ failing actions in a row or 5 identical actions on a screen that did not change,
 and a `done` is pushed back once if checklist items are still pending. Task summaries are
 saved to conversation memory so the next task knows what was done before.
 
+**Waiting for results.** Apps, web pages and AI chat sites answer asynchronously: pressing
+Enter in a chat only *starts* the reply. So the loop never treats "I pressed Enter" as "the
+step is done":
+
+* after any action that changes the screen it waits until the screen stops changing
+  (`AGENT_SETTLE_TIMEOUT` / `AGENT_SETTLE_QUIET`, see `agent/screen/settle.py`) before the
+  next observation, and tells the LLM if the screen was still changing at the timeout;
+* once Enter/Return is pressed, the rest of that batch is held back, so the next message
+  is never typed before the result has been looked at;
+* the LLM has `wait.until_screen_stable` and `wait.seconds` tools, and its rules say a reply
+  must be complete (text stopped growing, no Stop/Thinking indicator) and fully read before
+  it asks a follow-up that depends on it;
+* OCR text per observation is `AGENT_OBSERVE_OCR_CHARS` (default 6000) so long answers fit.
+
 The agent is LLM-only: there is no rule-based planner or mock mode. Without a configured
 provider (`LLM_PROVIDER` + `LLM_API_KEY`) no task is created anywhere (dashboard, mobile,
 Telegram, `/schedule`): the server answers HTTP 409, Telegram replies with the setup hint,

@@ -42,6 +42,14 @@ MAX_CONSECUTIVE_FAILURES = 5
 REPEAT_WARN = 3
 REPEAT_FAIL = 5
 
+# Actions that cannot change what is on screen: no need to wait for the screen afterwards.
+NO_SETTLE_TOOLS = {"desktop.screenshot", "desktop.ocr_screen", "desktop.get_monitors",
+                   "desktop.list_desktop_items"}
+NO_SETTLE_PREFIXES = ("filesystem.", "terminal.", "wait.")
+# Pressing one of these submits a message/form/command, i.e. STARTS work whose result
+# arrives later. Nothing may be typed or clicked in the same batch after it.
+SUBMIT_KEYS = {"enter", "return"}
+
 SYSTEM_PROMPT = """You are the reasoning engine of an autonomous Windows PC agent.
 You work in a loop. Each turn you are shown the goal, your checklist, your notes,
 your recent actions with their results, and a fresh observation of the PC.
@@ -68,7 +76,21 @@ Rules:
   look at the next observation before continuing. Batch actions only when the
   sequence is certain.
 - Mark a checklist item "done" only when the action results or the observation prove it.
-  Never assume an earlier action worked.
+  Never assume an earlier action worked. Doing something (typing, clicking, pressing Enter)
+  is not the same as the step being finished: "done" needs the OUTCOME to be visible.
+- WAITING: apps, web pages and AI chat sites work asynchronously. Pressing Enter, clicking
+  Send/Submit/Run or opening a page only STARTS the work; the result is not there yet. Never
+  type or click anything new until the observation shows the result is COMPLETE. For a chat/AI
+  reply that means: the text has stopped growing, no "Stop" / "Stop generating" / "Thinking" /
+  spinner is visible, and the Send button is back. If SYSTEM FEEDBACK says the screen is still
+  changing, or you are not sure, call wait.until_screen_stable (again if it reports
+  stable=false), then look at the next observation.
+- Submit at most one thing per turn (Enter, Send, Submit, Run) and make it the LAST action of
+  that turn. Look at the result on the next turn before doing anything else.
+- If the goal is a conversation (ask something, then follow up on the answer), READ the whole
+  answer before sending the next message (scroll if it is longer than the screen), write its
+  key points into "notes", and base the follow-up on what the answer actually said. Never send
+  a follow-up that ignores the previous answer.
 - If an action FAILED, read the error and change something (arguments, tool, approach).
   Do not repeat the same failing call.
 - Use status "done" only when every checklist item is done or skipped and the observation
@@ -280,6 +302,7 @@ class ReasoningLoop:
                  observe: Callable[[], Observation],
                  max_iterations: int = 0, max_actions_per_turn: int = 3,
                  history_window: int = 8, use_vision: bool = False,
+                 settle: Optional[Callable[[Callable[[], bool]], Dict[str, Any]]] = None,
                  sleep: Callable[[float], None] = time.sleep):
         self.llm = llm
         self.executor = executor
@@ -291,6 +314,9 @@ class ReasoningLoop:
         self.max_actions = max_actions_per_turn
         self.history_window = history_window
         self.use_vision = use_vision
+        # settle(should_stop) waits until the screen stops changing and returns
+        # {"stable": bool, "waited": seconds}. None = do not wait.
+        self.settle = settle
         self.sleep = sleep
         self._vision_errors = 0
 
@@ -363,18 +389,30 @@ class ReasoningLoop:
                 if len(actions) > self.max_actions:
                     feedback.append(f"Only {self.max_actions} actions run per turn; the rest were "
                                     "dropped. Resend them next turn if still needed.")
-                for act in actions[:self.max_actions]:
+                batch = actions[:self.max_actions]
+                ran: List[Dict[str, Any]] = []
+                for i, act in enumerate(batch):
                     if self.engine.stop_requested(task.id):
                         self._persist(task, state)
                         return self._finish("stopped", "Stopped by user.", state, turn)
                     rec = self._run_action(task, state, act)
                     rec["obs"] = obs_key
+                    ran.append(rec)
                     if rec["ok"]:
                         consecutive_failures = 0
                     else:
                         consecutive_failures += 1
                         feedback.append(f"Action #{rec['n']} {rec['tool']} FAILED: {rec['summary']}")
                         break  # later actions probably depend on this one
+                    if self._is_submit(act) and i < len(batch) - 1:
+                        feedback.append(
+                            f"You pressed {self._submit_key(act)} (submitting something) and the "
+                            f"{len(batch) - 1 - i} action(s) after it were NOT run: the result is not "
+                            "there yet. Check the next observation; resend them only if still needed "
+                            "once the result is complete.")
+                        break
+                if self.settle and ran and ran[-1]["ok"] and any(self._changes_screen(r) for r in ran):
+                    self._settle_screen(task, feedback)
                 self._persist(task, state)
 
                 if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
@@ -487,6 +525,47 @@ class ReasoningLoop:
                 break
             count += 1
         return count
+
+    # ------------------------------------------------------------------ waiting for results
+    @staticmethod
+    def _changes_screen(rec: Dict[str, Any]) -> bool:
+        tool = rec.get("tool") or ""
+        return tool not in NO_SETTLE_TOOLS and not tool.startswith(NO_SETTLE_PREFIXES)
+
+    @staticmethod
+    def _submit_key(act: Dict[str, Any]) -> str:
+        """The Enter/Return key the action presses, or "" if it presses neither."""
+        tool = str(act.get("tool") or act.get("name") or "").strip()
+        args = act.get("arguments", act.get("args", {}))
+        if not isinstance(args, dict):
+            return ""
+        if tool == "desktop.press":
+            keys = [args.get("key")]
+        elif tool == "desktop.hotkey":
+            keys = args.get("keys") if isinstance(args.get("keys"), list) else [args.get("keys")]
+        else:
+            return ""
+        for k in keys:
+            if isinstance(k, str) and k.strip().lower() in SUBMIT_KEYS:
+                return k.strip()
+        return ""
+
+    def _is_submit(self, act: Dict[str, Any]) -> bool:
+        return bool(self._submit_key(act))
+
+    def _settle_screen(self, task, feedback: List[str]) -> None:
+        """Wait for the screen to stop changing; tell the LLM if it never did."""
+        try:
+            res = self.settle(lambda: self.engine.stop_requested(task.id))
+        except Exception:
+            logger.warning("settle failed", exc_info=True)
+            return
+        if isinstance(res, dict) and res.get("stable") is False and not res.get("stopped"):
+            feedback.append(
+                f"The screen was still changing after waiting {res.get('waited')}s: something is "
+                "probably still loading or a reply is still being written. The last step is NOT "
+                "finished yet. Do not send the next message or mark the step done; call "
+                "wait.until_screen_stable and read the final result first.")
 
     # ------------------------------------------------------------------ actions
     def _run_action(self, task, state: TaskState, act: Dict[str, Any]) -> Dict[str, Any]:

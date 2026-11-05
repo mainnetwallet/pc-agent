@@ -22,6 +22,13 @@ def _env_int(name, default):
         return default
 
 
+def _env_float(name, default):
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _env_bool(name, default):
     val = os.getenv(name)
     if val is None:
@@ -97,6 +104,12 @@ AGENT_MAX_ITERATIONS = _env_int("AGENT_MAX_ITERATIONS", 0)  # LLM turns per task
 AGENT_MAX_ACTIONS_PER_TURN = _env_int("AGENT_MAX_ACTIONS_PER_TURN", 3)
 AGENT_HISTORY_WINDOW = _env_int("AGENT_HISTORY_WINDOW", 8)  # recent actions shown in detail
 AGENT_OBSERVE_OCR = _env_bool("AGENT_OBSERVE_OCR", True)  # add OCR text to each observation
+AGENT_OBSERVE_OCR_CHARS = _env_int("AGENT_OBSERVE_OCR_CHARS", 6000)  # max OCR chars per observation
+# After an action that changes the screen, wait (up to this many seconds) for the screen to
+# stop changing before the next observation, so a half-written chat answer or a page that is
+# still loading is not mistaken for a finished step. 0 disables the wait.
+AGENT_SETTLE_TIMEOUT = _env_float("AGENT_SETTLE_TIMEOUT", 15.0)
+AGENT_SETTLE_QUIET = _env_float("AGENT_SETTLE_QUIET", 2.0)  # seconds without change = settled
 
 # ---------------------------------------------------------------------------
 # Desktop control
@@ -151,6 +164,7 @@ __all__ = [
     "TASK_DB_PATH", "TASK_EXECUTION_TIMEOUT", "STUCK_STATE_THRESHOLD",
     "MAX_RETRIES", "RETRY_BASE_BACKOFF", "AGENT_MAX_ITERATIONS",
     "AGENT_MAX_ACTIONS_PER_TURN", "AGENT_HISTORY_WINDOW", "AGENT_OBSERVE_OCR",
+    "AGENT_OBSERVE_OCR_CHARS", "AGENT_SETTLE_TIMEOUT", "AGENT_SETTLE_QUIET",
     "DESKTOP_INPUT_LOCK",
     "SCREENSHOT_QUALITY", "SCREENSHOT_MAX_DIMENSION", "PYAUTOGUI_PAUSE",
     "PYAUTOGUI_FAILSAFE", "SCREEN_CAPTURE_FPS", "SCREEN_CAPTURE_QUALITY",

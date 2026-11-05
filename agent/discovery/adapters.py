@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from control.desktop import DesktopControl
 from control.windows import windows, discover_installed_apps
 from discovery.registry import registry, PERMISSION_LEVELS
+from screen.settle import clamp, wait_until_stable
 
 
 class ApplicationAdapter:
@@ -370,9 +371,76 @@ class DesktopAdapter(ApplicationAdapter):
         return caps
 
 
+class WaitAdapter(ApplicationAdapter):
+    """Tools for waiting on things that finish later (page loads, AI chat replies, downloads).
+
+    These are deliberately NOT named "desktop.*": desktop tools hold the exclusive input
+    lock while they run, and a long wait must not block the keyboard and mouse.
+    """
+
+    MAX_SECONDS = 60.0
+    MAX_STABLE_TIMEOUT = 120.0
+
+    def __init__(self):
+        super().__init__("Wait")
+
+    def _seconds(self, seconds: float = 3) -> Dict[str, Any]:
+        secs = clamp(seconds, 0.0, self.MAX_SECONDS, 3.0)
+        time.sleep(secs)
+        return {"ok": True, "waited": secs}
+
+    def _until_screen_stable(self, timeout_seconds: float = 30,
+                             quiet_seconds: float = 3) -> Dict[str, Any]:
+        timeout = clamp(timeout_seconds, 1.0, self.MAX_STABLE_TIMEOUT, 30.0)
+        quiet = clamp(quiet_seconds, 1.0, 30.0, 3.0)
+
+        def grab():
+            _, pil = self.desktop.screenshot(save=False)
+            return pil
+
+        res = wait_until_stable(grab, timeout=timeout, quiet_for=quiet)
+        if res.get("stable"):
+            res["message"] = (f"Screen stayed unchanged for {quiet:g}s: whatever was loading or "
+                              "being written has finished. Read the next observation.")
+        else:
+            res["message"] = (f"Screen was STILL changing after {res.get('waited')}s (timeout "
+                              f"{timeout:g}s): it is probably still working. Wait again before "
+                              "reading the result or acting on it.")
+        res["ok"] = True
+        return res
+
+    def discover_capabilities(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "tool_name": "wait.until_screen_stable",
+                "callable": self._until_screen_stable,
+                "description": "Wait until the screen stops changing (page loaded, AI chat reply fully "
+                               "written, download finished). Use it after submitting something and "
+                               "before reading the result. Returns stable=false if it was still "
+                               "changing at the timeout; then call it again.",
+                "input_schema": {"type": "object", "properties": {
+                    "timeout_seconds": {"type": "number"},
+                    "quiet_seconds": {"type": "number"}}, "required": []},
+                "permission": "owner",
+                "category": "wait",
+            },
+            {
+                "tool_name": "wait.seconds",
+                "callable": self._seconds,
+                "description": "Pause for a fixed number of seconds (max 60) when you know something "
+                               "needs time but the screen will not visibly change",
+                "input_schema": {"type": "object", "properties": {
+                    "seconds": {"type": "number"}}, "required": ["seconds"]},
+                "permission": "owner",
+                "category": "wait",
+            },
+        ]
+
+
 # Built-in adapters to auto-register
 BUILTIN_ADAPTERS = [
     DesktopAdapter,
+    WaitAdapter,
     FileSystemAdapter,
     TerminalAdapter,
     NotepadAdapter,

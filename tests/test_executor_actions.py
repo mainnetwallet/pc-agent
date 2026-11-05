@@ -33,9 +33,13 @@ def _install_control_stubs():
         if name.split(".")[0] in ("control", "screen"):
             del sys.modules[name]
 
+    agent_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agent")
+
     def pkg(name):
         m = types.ModuleType(name)
-        m.__path__ = []
+        # "screen" keeps its real folder on the path so dependency-free submodules such as
+        # screen.settle (Pillow only) import for real; screen.capture is mocked below.
+        m.__path__ = [os.path.join(agent_dir, name)] if name == "screen" else []
         sys.modules[name] = m
 
     def mod(name, **attrs):
@@ -317,6 +321,51 @@ class TestAgentRunTask(unittest.TestCase):
         self.assertIn("LLM not configured", t["error"])
         self.assertIn("LLM not configured", text)
         self.assertEqual(memory.get_task_steps(tid), [])
+
+
+class TestWaitTools(unittest.TestCase):
+    """wait.seconds / wait.until_screen_stable: registered, lock-free, tolerant of LLM input."""
+
+    @classmethod
+    def setUpClass(cls):
+        from discovery.adapters import WaitAdapter
+        cls.adapter = WaitAdapter()
+        cls.names = cls.adapter.register()
+
+    def test_registered_and_not_desktop_tools(self):
+        # "desktop.*" tools hold the exclusive input lock while they run; a long wait must not.
+        self.assertEqual(sorted(self.names), ["wait.seconds", "wait.until_screen_stable"])
+        self.assertTrue(all(not n.startswith("desktop.") for n in self.names))
+        for n in self.names:
+            self.assertTrue(registry.has_tool(n))
+
+    def test_wait_seconds_is_clamped_and_tolerates_bad_input(self):
+        with mock.patch("discovery.adapters.time.sleep") as sleep:
+            r = registry.execute("wait.seconds", {"seconds": 9999})
+            self.assertTrue(r["ok"])
+            self.assertEqual(r["result"]["waited"], 60.0)
+            sleep.assert_called_with(60.0)
+            r = registry.execute("wait.seconds", {"seconds": "five"})
+            self.assertEqual(r["result"]["waited"], 3.0)
+        self.assertFalse(registry.execute("wait.seconds", {})["ok"])  # required argument
+
+    def test_until_screen_stable_reports_stable_and_still_changing(self):
+        with mock.patch("discovery.adapters.wait_until_stable",
+                        return_value={"stable": True, "waited": 4.0, "changes": 3}) as w:
+            r = registry.execute("wait.until_screen_stable",
+                                 {"timeout_seconds": "9999", "quiet_seconds": None})
+            self.assertTrue(r["ok"])
+            self.assertTrue(r["result"]["stable"])
+            self.assertIn("finished", r["result"]["message"])
+            self.assertEqual(w.call_args.kwargs["timeout"], 120.0)   # clamped
+            self.assertEqual(w.call_args.kwargs["quiet_for"], 3.0)   # default for junk
+        with mock.patch("discovery.adapters.wait_until_stable",
+                        return_value={"stable": False, "waited": 30.0, "changes": 40}):
+            r = registry.execute("wait.until_screen_stable", {})
+            # Still-changing is information for the model, not a tool failure.
+            self.assertTrue(r["ok"])
+            self.assertFalse(r["result"]["stable"])
+            self.assertIn("STILL changing", r["result"]["message"])
 
 
 if __name__ == "__main__":

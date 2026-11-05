@@ -406,6 +406,153 @@ class TestFeedbackAndGuards(unittest.TestCase):
         self.assertIn("observation failed", llm.prompts[0])
 
 
+TYPE_Q1 = {"tool": "desktop.type_text", "arguments": {"text": "Question 1?"}}
+ENTER = {"tool": "desktop.press", "arguments": {"key": "enter"}}
+TYPE_Q2 = {"tool": "desktop.type_text", "arguments": {"text": "Question 2?"}}
+WAIT_STABLE = {"tool": "wait.until_screen_stable", "arguments": {}}
+DONE = {"plan_update": [{"id": 1, "status": "done"}], "status": "done", "summary": "ok"}
+
+
+class RecordingSettle:
+    """Fake for ReasoningLoop(settle=...): records calls, returns scripted results."""
+
+    def __init__(self, results=None):
+        self.results = list(results or [])
+        self.calls = 0
+
+    def __call__(self, should_stop):
+        self.calls += 1
+        return self.results.pop(0) if self.results else {"stable": True, "waited": 2.0}
+
+
+class TestWaitingForResults(unittest.TestCase):
+    """The agent must not move on while the previous step is still in progress, e.g. send
+    the next question to a chat AI before the previous answer has been written."""
+
+    def test_actions_after_enter_are_held_back_until_the_result_is_seen(self):
+        # The model batches: type Q1, Enter, type Q2 (the reported bug).
+        llm = FakeLLM([
+            {"plan": ["ask q1", "read answer", "ask q2"],
+             "actions": [TYPE_Q1, ENTER, TYPE_Q2], "status": "continue"},
+            {"actions": [WAIT_STABLE], "status": "continue"},
+            {"plan_update": [{"id": 1, "status": "done"}, {"id": 2, "status": "done"},
+                             {"id": 3, "status": "skipped"}], "status": "done", "summary": "ok"},
+        ])
+        loop, _, executor = make_loop(llm, settle=RecordingSettle())
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+        ran = [t for t, _ in executor.calls]
+        self.assertEqual(ran[:2], ["desktop.type_text", "desktop.press"])
+        self.assertNotIn(("desktop.type_text", TYPE_Q2["arguments"]), executor.calls)
+        self.assertEqual(ran.count("desktop.type_text"), 1)
+        self.assertIn("were NOT run", llm.prompts[1])
+
+    def test_enter_as_last_action_is_normal(self):
+        llm = FakeLLM([
+            {"plan": ["a"], "actions": [TYPE_Q1, ENTER], "status": "continue"},
+            DONE,
+        ])
+        loop, _, executor = make_loop(llm, settle=RecordingSettle())
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+        self.assertEqual(len(executor.calls), 2)
+        self.assertNotIn("NOT run", llm.prompts[1])
+
+    def test_return_key_and_enter_inside_a_hotkey_also_submit(self):
+        for act in ({"tool": "desktop.press", "arguments": {"key": "Return"}},
+                    {"tool": "desktop.hotkey", "arguments": {"keys": ["ctrl", "enter"]}}):
+            llm = FakeLLM([
+                {"plan": ["a"], "actions": [act, TYPE_Q2], "status": "continue"},
+                DONE,
+            ])
+            loop, _, executor = make_loop(llm, settle=RecordingSettle())
+            self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+            self.assertEqual(len(executor.calls), 1, act)
+
+    def test_screen_is_settled_after_a_screen_changing_action(self):
+        settle = RecordingSettle()
+        llm = FakeLLM([
+            {"plan": ["a"], "actions": [TYPE_Q1, ENTER], "status": "continue"},
+            DONE,
+        ])
+        loop, _, _ = make_loop(llm, settle=settle)
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+        self.assertEqual(settle.calls, 1)
+
+    def test_no_settle_after_read_only_or_wait_actions(self):
+        settle = RecordingSettle()
+        read_only = [{"tool": "desktop.screenshot", "arguments": {}},
+                     {"tool": "filesystem.read_file", "arguments": {"path": "a.txt"}},
+                     WAIT_STABLE]
+        llm = FakeLLM([
+            {"plan": ["a"], "actions": read_only, "status": "continue"},
+            DONE,
+        ])
+        loop, _, _ = make_loop(llm, settle=settle)
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+        self.assertEqual(settle.calls, 0)
+
+    def test_screen_still_changing_is_reported_to_the_model(self):
+        settle = RecordingSettle([{"stable": False, "waited": 15.0}])
+        llm = FakeLLM([
+            {"plan": ["a"], "actions": [TYPE_Q1, ENTER], "status": "continue"},
+            {"actions": [WAIT_STABLE], "status": "continue"},
+            DONE,
+        ])
+        loop, _, _ = make_loop(llm, settle=settle)
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+        self.assertIn("still changing", llm.prompts[1])
+        self.assertIn("wait.until_screen_stable", llm.prompts[1])
+        self.assertNotIn("still changing", llm.prompts[2])
+
+    def test_stable_screen_adds_no_warning(self):
+        llm = FakeLLM([
+            {"plan": ["a"], "actions": [TYPE_Q1, ENTER], "status": "continue"},
+            DONE,
+        ])
+        loop, _, _ = make_loop(llm, settle=RecordingSettle([{"stable": True, "waited": 3.0}]))
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+        self.assertNotIn("still changing", llm.prompts[1])
+
+    def test_a_crashing_settle_does_not_break_the_task(self):
+        def boom(should_stop):
+            raise RuntimeError("screenshot failed")
+
+        llm = FakeLLM([
+            {"plan": ["a"], "actions": [TYPE_Q1], "status": "continue"},
+            DONE,
+        ])
+        loop, _, _ = make_loop(llm, settle=boom)
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+
+    def test_no_settle_when_the_last_action_failed(self):
+        settle = RecordingSettle()
+
+        def handler(tool, args):
+            return {"ok": False, "tool": tool, "error": "boom"}
+
+        llm = FakeLLM([
+            {"plan": ["a"], "actions": [TYPE_Q1], "status": "continue"},
+            {"status": "failed", "summary": "gave up"},
+        ])
+        loop, _, _ = make_loop(llm, executor=FakeExecutor(handler), settle=settle)
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "failed")
+        self.assertEqual(settle.calls, 0)
+
+    def test_without_a_settle_function_behaviour_is_unchanged(self):
+        llm = FakeLLM([
+            {"plan": ["a"], "actions": [TYPE_Q1, ENTER], "status": "continue"},
+            DONE,
+        ])
+        loop, _, executor = make_loop(llm)
+        self.assertEqual(loop.run(make_task(), "chat").outcome, "done")
+        self.assertEqual(len(executor.calls), 2)
+
+    def test_system_prompt_teaches_waiting_and_reading_the_answer(self):
+        from core.loop import SYSTEM_PROMPT
+        for needle in ("WAITING", "wait.until_screen_stable", "READ the whole",
+                       "LAST action", "OUTCOME"):
+            self.assertIn(needle, SYSTEM_PROMPT)
+
+
 class TestHelpers(unittest.TestCase):
     def test_extract_json_object(self):
         self.assertEqual(extract_json_object('```json\n{"a": 1}\n```'), {"a": 1})
