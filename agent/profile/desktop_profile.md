@@ -44,7 +44,12 @@ Always check the live screenshot first: icon positions can change, names are the
   deploy contracts: only run them on an explicit, specific owner request, and report what they did.
 
 6) HOW TO WORK
-- Prefer the desktop tool that lists items/launches by name over blind clicking.
-- Double-click an icon to open it, then wait for the window and look at the next observation.
+- To open an icon use the tool desktop.launch_application with the icon's exact name, for example
+  {"tool": "desktop.launch_application", "arguments": {"app_name_or_path": "-7"}}.
+  desktop.list_desktop_items lists the real icon names if you are unsure.
+- Numbered Chrome profiles: pass the number EXACTLY as written. "-7" and "7" are two different
+  profiles, and "1" is not "10". Never drop the minus sign. Never pick a nearby number.
+  If the launch fails, do not try a similar name: take a screenshot and report needs_user.
+- After launching, wait for the window and read the next observation before the next action.
 - One profile/app at a time; close what you opened when the goal is done unless told to keep it open.
 - If an icon from this profile is not on the screen, say so in the summary instead of guessing.

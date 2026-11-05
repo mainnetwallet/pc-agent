@@ -103,6 +103,30 @@ class TestRankMatches(DesktopTestCase):
         ]
         self.assertEqual(launcher.rank_matches("chrome", entries)[0]["path"], "dk")
 
+    def test_numbered_icons_match_exactly(self):
+        """Chrome profile shortcuts '1' and '-1' are different; '1' must not open '10'."""
+        entries = [{"name": n, "filename": n + ".lnk", "path": n, "source": "desktop"}
+                   for n in ("1", "-1", "10", "24", "-24")]
+        self.assertEqual(self.rank("-1", entries), ["-1"])
+        self.assertEqual(self.rank("1", entries), ["1"])
+        self.assertEqual(self.rank("-24", entries), ["-24"])
+        self.assertEqual(self.rank("24", entries), ["24"])
+        # no near-miss fallback for numbers: fail instead of opening the wrong profile
+        self.assertEqual(self.rank("-1", [entries[0], entries[2]]), [])
+        self.assertEqual(self.rank("1", [entries[1], entries[2]]), [])
+
+    def test_exact_desktop_match_numbered(self):
+        items = [{"name": "1", "filename": "1.lnk", "path": "p1", "source": "desktop"},
+                 {"name": "-1", "filename": "-1.lnk", "path": "pm1", "source": "desktop"}]
+        orig = launcher.list_desktop_items
+        launcher.list_desktop_items = lambda dirs=None: items
+        try:
+            self.assertEqual(launcher.exact_desktop_match("-1")["path"], "pm1")
+            self.assertEqual(launcher.exact_desktop_match("1")["path"], "p1")
+            self.assertIsNone(launcher.exact_desktop_match("-2"))
+        finally:
+            launcher.list_desktop_items = orig
+
     def test_empty_and_unknown(self):
         self.assertEqual(self.rank(""), [])
         self.assertEqual(self.rank("zzz nothing"), [])

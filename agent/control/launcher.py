@@ -31,6 +31,19 @@ def _norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", (text or "").lower())
 
 
+_NUMERIC_RE = re.compile(r"^[+-]?\d+$")
+
+
+def _raw(text: str) -> str:
+    """Case-insensitive, whitespace-trimmed name that KEEPS punctuation ('-1' stays '-1')."""
+    return (text or "").strip().lower()
+
+
+def _raw_names(entry: Dict) -> List[str]:
+    stem = os.path.splitext(entry.get("filename", "") or "")[0]
+    return [n for n in (_raw(entry.get("name", "")), _raw(stem)) if n]
+
+
 def _shell_folder(csidl: int) -> Optional[str]:
     """Real path of a Windows special folder (follows OneDrive/redirected Desktop)."""
     if sys.platform != "win32":
@@ -183,12 +196,21 @@ def rank_matches(query: str, entries: List[Dict]) -> List[Dict]:
     q = _norm(query)
     if not q:
         return []
+    raw_q = _raw(query)
+    if _NUMERIC_RE.match(raw_q):
+        # Numbered icons ("1", "-1", "24", "-24" ...) must match EXACTLY: normalising would
+        # turn "-1" into "1" and prefix matching would turn "1" into "10", opening the wrong one.
+        exact = [e for e in entries if raw_q in _raw_names(e)]
+        exact.sort(key=lambda e: SOURCE_PRIORITY.get(e.get("source", ""), 9))
+        return exact
     scored = []
     for e in entries:
         names = [n for n in (_norm(e.get("name", "")), _norm(e.get("filename", ""))) if n]
         if not names:
             continue
-        if q in names:
+        if raw_q in _raw_names(e):
+            score = -1
+        elif q in names:
             score = 0
         elif any(n.startswith(q) for n in names):
             score = 1
@@ -253,7 +275,14 @@ def exact_desktop_match(query: str) -> Optional[Dict]:
     q = _norm(query)
     if not q:
         return None
-    for e in list_desktop_items():
+    raw_q = _raw(query)
+    items = list_desktop_items()
+    for e in items:  # punctuation-exact first ("-1" is not "1")
+        if raw_q in _raw_names(e):
+            return e
+    if _NUMERIC_RE.match(raw_q):
+        return None
+    for e in items:
         if q in (_norm(e["name"]), _norm(e["filename"])):
             return e
     return None
