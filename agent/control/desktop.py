@@ -109,7 +109,33 @@ class DesktopControl:
 
     # ------------------------------------------------------------------ keyboard
     def type_text(self, text: str, interval: float = 0.01) -> None:
-        pyautogui.typewrite(text, interval=interval)
+        """Type text at the focus.
+
+        pyautogui.typewrite only knows ASCII keys: it silently SKIPS every other character
+        (Bengali, Arabic, accents, emoji, curly quotes...). Such text is pasted through the
+        clipboard instead, so what ends up on screen is what the LLM asked for.
+        """
+        if text.isascii():
+            pyautogui.typewrite(text, interval=interval)
+        else:
+            self._paste_text(text)
+
+    def _paste_text(self, text: str) -> None:
+        import pyperclip  # installed with pyautogui
+        previous = ""
+        try:
+            previous = pyperclip.paste()
+        except Exception:
+            pass
+        pyperclip.copy(text)
+        time.sleep(0.05)
+        pyautogui.hotkey("ctrl", "v")
+        time.sleep(0.2)  # let the target app read the clipboard before it is restored
+        if previous:
+            try:
+                pyperclip.copy(previous)
+            except Exception:
+                pass
 
     def press(self, key: str, presses: int = 1, interval: float = 0.0) -> None:
         pyautogui.press(key, presses=presses, interval=interval)

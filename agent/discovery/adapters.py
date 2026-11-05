@@ -269,6 +269,41 @@ class DesktopAdapter(ApplicationAdapter):
         self.desktop.click(x, y, button=button)
         return {"ok": True, "x": x, "y": y, "button": button}
 
+    # Mouse wheel scrolling moves long feeds/chats/pages. Without it the agent can open an
+    # app but never read past the first screen. 1 notch is about 3 lines on Windows.
+    MAX_SCROLL_NOTCHES = 30
+
+    def _scroll(self, direction: str = "down", amount: int = 5,
+                x: Optional[int] = None, y: Optional[int] = None) -> Dict[str, Any]:
+        direction = str(direction or "").strip().lower()
+        if direction not in ("up", "down"):
+            return {"ok": False, "error": "direction must be 'up' or 'down'"}
+        if (x is None) != (y is None):
+            return {"ok": False, "error": "Give both x and y (where to scroll) or neither."}
+        notches = int(clamp(amount, 1, self.MAX_SCROLL_NOTCHES, 5))
+        self.desktop.scroll(notches if direction == "up" else -notches, x=x, y=y)
+        return {"ok": True, "direction": direction, "amount": notches, "x": x, "y": y}
+
+    def _double_click(self, x: int, y: int) -> Dict[str, Any]:
+        self.desktop.double_click(x, y)
+        return {"ok": True, "x": x, "y": y}
+
+    def _drag(self, from_x: int, from_y: int, to_x: int, to_y: int) -> Dict[str, Any]:
+        self.desktop.drag_to(to_x, to_y, from_x=from_x, from_y=from_y)
+        return {"ok": True, "from": [from_x, from_y], "to": [to_x, to_y]}
+
+    def _move_mouse(self, x: int, y: int) -> Dict[str, Any]:
+        self.desktop.move_to(x, y)
+        return {"ok": True, "x": x, "y": y}
+
+    def _focus_window(self, title_contains: str) -> Dict[str, Any]:
+        if self.desktop.switch_to_window(title_contains):
+            return {"ok": True, "focused": title_contains}
+        titles = [w.title for w in self.desktop.get_all_windows() if w.title][:15]
+        return {"ok": False,
+                "error": f"No window with '{title_contains}' in its title could be focused. "
+                         f"Open windows: {' | '.join(titles) or 'none'}"}
+
     def _type_text(self, text: str) -> Dict[str, Any]:
         self.desktop.type_text(text)
         return {"ok": True, "chars": len(text)}
@@ -322,8 +357,60 @@ class DesktopAdapter(ApplicationAdapter):
             {
                 "tool_name": "desktop.click",
                 "callable": self._click,
-                "description": "Click at screen coordinates",
+                "description": "Click at screen coordinates (button: left (default) | right | middle)",
                 "input_schema": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "button": {"type": "string"}}, "required": ["x", "y"]},
+                "permission": "owner",
+                "category": "desktop",
+            },
+            {
+                "tool_name": "desktop.scroll",
+                "callable": self._scroll,
+                "description": "Scroll the mouse wheel to read more of a chat, channel, feed or page. "
+                               "direction is 'down' (see later/lower content) or 'up'; amount is the number "
+                               "of wheel notches (default 5, about 15 lines, max 30). Pass x,y to scroll "
+                               "the area under that point (e.g. the middle of the message list); the "
+                               "mouse moves there first. Then read the next observation.",
+                "input_schema": {"type": "object", "properties": {
+                    "direction": {"type": "string", "enum": ["down", "up"]},
+                    "amount": {"type": "integer"},
+                    "x": {"type": "integer"}, "y": {"type": "integer"}}, "required": []},
+                "permission": "owner",
+                "category": "desktop",
+            },
+            {
+                "tool_name": "desktop.double_click",
+                "callable": self._double_click,
+                "description": "Double-click at screen coordinates (open a file/icon, select a word)",
+                "input_schema": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]},
+                "permission": "owner",
+                "category": "desktop",
+            },
+            {
+                "tool_name": "desktop.drag",
+                "callable": self._drag,
+                "description": "Press at from_x,from_y, drag to to_x,to_y and release (sliders, "
+                               "selecting text, moving items, puzzle captchas)",
+                "input_schema": {"type": "object", "properties": {
+                    "from_x": {"type": "integer"}, "from_y": {"type": "integer"},
+                    "to_x": {"type": "integer"}, "to_y": {"type": "integer"}},
+                    "required": ["from_x", "from_y", "to_x", "to_y"]},
+                "permission": "owner",
+                "category": "desktop",
+            },
+            {
+                "tool_name": "desktop.move_mouse",
+                "callable": self._move_mouse,
+                "description": "Move the mouse pointer to screen coordinates without clicking (hover menus/tooltips)",
+                "input_schema": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}, "required": ["x", "y"]},
+                "permission": "owner",
+                "category": "desktop",
+            },
+            {
+                "tool_name": "desktop.focus_window",
+                "callable": self._focus_window,
+                "description": "Bring an already open window to the front by part of its title "
+                               "(e.g. 'Telegram'). Use it to come back to an app instead of launching it again.",
+                "input_schema": {"type": "object", "properties": {"title_contains": {"type": "string"}}, "required": ["title_contains"]},
                 "permission": "owner",
                 "category": "desktop",
             },
