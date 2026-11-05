@@ -110,3 +110,35 @@ main{padding:28px clamp(16px,3vw,40px);max-width:1280px}
 .tlog .msg{max-width:min(85%,640px)}
 .tlog .msg.user{align-self:flex-end}
 .tchat .compose{border-top:0;padding-top:4px}
+
+/* Action page: one chat per task that needs the user */
+.inbox{display:grid;grid-template-columns:minmax(240px,320px) minmax(0,1fr);gap:20px;align-items:start}
+.threads h2{display:flex;align-items:center;margin:0 0 8px;font-size:14px;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+.threads h2:not(:first-child){margin-top:20px}
+.threads h2 .badge{margin-left:8px}
+.threads ul{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.thread{display:block;width:100%;text-align:left;padding:10px 12px;border-radius:8px}
+.thread.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--panel))}
+.thread .ins{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;margin-bottom:4px}
+.tmeta{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px}
+.tmeta code{color:var(--mute)}
+.room{display:flex;flex-direction:column;min-width:0;height:calc(100dvh - 150px);min-height:420px;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden}
+.room>.empty{margin:auto;padding:24px;text-align:center}
+.roomhead{padding:14px 16px;border-bottom:1px solid var(--line)}
+.roomhead .ins{font-weight:600;margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.roomhead .meta{flex-wrap:wrap;gap:8px 12px}
+.roomhead .meta>button{padding:2px 10px;font-size:13px}
+.cid{font-size:12px;color:var(--mute);overflow-wrap:anywhere}
+.back{display:none;margin-bottom:8px;padding:2px 10px;font-size:13px}
+.room .tchat{display:flex;flex-direction:column;flex:1;min-height:0;padding:12px 16px 14px}
+.room .tlog{flex:1;overflow-y:auto;margin:0 0 8px;padding-right:2px}
+.room .tchat .msg{background:var(--bg)}
+.room .tchat .msg.user{background:var(--accent);border-color:var(--accent)}
+.room .tchat .compose{border-top:1px solid var(--line);padding-top:12px}
+@media(max-width:860px){
+  .inbox{grid-template-columns:1fr}
+  .inbox.open .threads{display:none}
+  .inbox:not(.open) .room{display:none}
+  .inbox.open .back{display:inline-block}
+  .room{height:calc(100dvh - 190px)}
+}
