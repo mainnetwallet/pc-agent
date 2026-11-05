@@ -16,6 +16,7 @@ from typing import Optional
 
 from telegram import Update, InputFile
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.error import InvalidToken
 
 from config import (
     TELEGRAM_BOT_TOKEN, OWNER_TELEGRAM_IDS, TELEGRAM_MODE,
@@ -319,7 +320,12 @@ class TelegramBot:
         logger.info("Telegram long-polling started")
         # Running in a worker thread: needs its own event loop and no signal handlers.
         asyncio.set_event_loop(asyncio.new_event_loop())
-        app.run_polling(drop_pending_updates=True, stop_signals=None)
+        try:
+            app.run_polling(drop_pending_updates=True, stop_signals=None)
+        except InvalidToken:
+            logger.error("Telegram disabled: TELEGRAM_BOT_TOKEN was rejected by Telegram. "
+                         "Create a bot with @BotFather and put its token in .env "
+                         "(the rest of the agent keeps running).")
 
     def run_webhook(self) -> None:
         """Webhook mode (server-based)."""

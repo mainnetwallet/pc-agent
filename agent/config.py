@@ -33,7 +33,7 @@ def _env_bool(name, default):
 # Identity / security
 # ---------------------------------------------------------------------------
 AGENT_NAME = _env("AGENT_NAME", "PC Agent")
-AGENT_ID = _env("AGENT_ID", os.getenv("COMPUTERNAME", "pc-agent"))
+AGENT_ID = _env("AGENT_ID", "") or os.getenv("COMPUTERNAME", "pc-agent")  # empty value => hostname
 
 # Telegram owner allowlist (numeric user IDs). Only these IDs may control the PC.
 # Comma-separated list of integer IDs.
@@ -47,7 +47,17 @@ for _part in _RAW_OWNER_IDS.split(","):
         except ValueError:
             pass
 
-TELEGRAM_BOT_TOKEN = _env("TELEGRAM_BOT_TOKEN", "")
+# The sample token that older copies of .env.example shipped with. It is not a real bot,
+# so treat it as "not configured" instead of crashing Telegram with InvalidToken.
+_PLACEHOLDER_TELEGRAM_TOKENS = {"123456789:ABCdefGHIjklMNOpqrsTUVwxyz"}
+
+
+def _clean_telegram_token(value):
+    value = (value or "").strip()
+    return "" if value in _PLACEHOLDER_TELEGRAM_TOKENS else value
+
+
+TELEGRAM_BOT_TOKEN = _clean_telegram_token(_env("TELEGRAM_BOT_TOKEN", ""))
 TELEGRAM_MODE = _env("TELEGRAM_MODE", "polling")  # polling | webhook
 TELEGRAM_WEBHOOK_URL = _env("TELEGRAM_WEBHOOK_URL", "")
 TELEGRAM_WEBHOOK_PORT = _env_int("TELEGRAM_WEBHOOK_PORT", 8443)
